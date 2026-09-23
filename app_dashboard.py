@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Dashboard de Auditoría QA Automotriz con IA (Google Gemini 3.6 Flash)
-Auditoría inteligente multimarca y multicanal (WhatsApp y Web).
+Acceso Seguro con Login y Auditoría Inteligente Multimarca.
 """
 
 import os
@@ -17,7 +17,6 @@ importlib.reload(procesar_pdf)
 from procesar_pdf import (
     procesar_pipeline,
     cargar_api_key_guardada,
-    guardar_api_key,
     CONFIG
 )
 
@@ -25,22 +24,36 @@ from procesar_pdf import (
 # CONFIGURACIÓN DE PÁGINA STREAMLIT
 # ==============================================================================
 st.set_page_config(
-    page_title="Autivo QA - Auditoría Inteligente de Ventas",
+    page_title="Autivo QA - Portal de Auditoría IA",
     page_icon="🚗",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS profesionales
+# Estilos CSS profesionales y modernos
 st.markdown("""
 <style>
+    /* Estilos Generales y Tipografía */
+    .main-title {
+        font-size: 2.1rem;
+        font-weight: 700;
+        color: #1B365D;
+        margin-bottom: 5px;
+    }
+    .sub-title {
+        font-size: 1rem;
+        color: #555;
+        margin-bottom: 25px;
+    }
+    
+    /* Tarjetas Métricas */
     .metric-card {
         background: linear-gradient(135deg, #1B365D 0%, #2A5298 100%);
         color: white;
         border-radius: 12px;
         padding: 18px;
         text-align: center;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        box-shadow: 0 4px 14px rgba(0,0,0,0.08);
     }
     .metric-num {
         font-size: 2.2rem;
@@ -48,66 +61,153 @@ st.markdown("""
         margin: 4px 0;
     }
     .metric-text {
-        font-size: 0.9rem;
-        opacity: 0.85;
+        font-size: 0.85rem;
+        opacity: 0.9;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
+    
+    /* Badges de Estado */
     .badge-ok {
         background-color: #D4EDDA;
         color: #155724;
         font-weight: 700;
-        padding: 3px 8px;
-        border-radius: 12px;
+        padding: 4px 10px;
+        border-radius: 14px;
+        display: inline-block;
     }
     .badge-fail {
         background-color: #F8D7DA;
         color: #721C24;
         font-weight: 700;
-        padding: 3px 8px;
-        border-radius: 12px;
+        padding: 4px 10px;
+        border-radius: 14px;
+        display: inline-block;
+    }
+    
+    /* Tarjeta de Login */
+    .login-container {
+        max-width: 440px;
+        margin: 60px auto;
+        padding: 35px 30px;
+        background: #FFFFFF;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+        border: 1px solid #EAEAEA;
+        text-align: center;
+    }
+    .login-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #1B365D;
+        margin-top: 10px;
+        margin-bottom: 4px;
+    }
+    .login-sub {
+        font-size: 0.9rem;
+        color: #666;
+        margin-bottom: 25px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# BARRA LATERAL (CONFIGURACIÓN Y ACCIONES)
+# SISTEMA DE AUTENTICACIÓN / PANTALLA DE LOGIN
+# ==============================================================================
+def verificar_credenciales(email: str, password: str) -> bool:
+    """Verifica credenciales contra Secrets o credenciales autorizadas."""
+    # Credenciales configuradas
+    email_valido = "santiagourrutiahojas@gmail.com"
+    pass_valida = "Santiago2608#"
+
+    # Revisar si se sobreescribieron en Secrets
+    try:
+        if hasattr(st, "secrets"):
+            email_valido = str(st.secrets.get("LOGIN_EMAIL", email_valido)).strip()
+            pass_valida = str(st.secrets.get("LOGIN_PASSWORD", pass_valida)).strip()
+    except Exception:
+        pass
+
+    return email.strip().lower() == email_valido.lower() and password.strip() == pass_valida
+
+if "autenticado" not in st.session_state:
+    st.session_state["autenticado"] = False
+
+if not st.session_state["autenticado"]:
+    # Renderizar pantalla de Login limpia y elegante
+    col_izq, col_centro, col_der = st.columns([1, 1.4, 1])
+    with col_centro:
+        st.markdown("""
+        <div class="login-container">
+            <img src="https://img.icons8.com/color/96/car--v1.png" width="70" />
+            <div class="login-title">Autivo QA Portal</div>
+            <div class="login-sub">Auditoría de Bots de Ventas con Inteligencia Artificial</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("form_login"):
+            correo_ingresado = st.text_input("Correo electrónico:", placeholder="usuario@correo.com")
+            clave_ingresada = st.text_input("Contraseña:", type="password", placeholder="••••••••")
+            btn_ingresar = st.form_submit_button("Iniciar Sesión", type="primary", use_container_width=True)
+
+            if btn_ingresar:
+                if verificar_credenciales(correo_ingresado, clave_ingresada):
+                    st.session_state["autenticado"] = True
+                    st.session_state["usuario_actual"] = correo_ingresado.strip()
+                    st.success("Acceso concedido. Cargando panel...")
+                    st.rerun()
+                else:
+                    st.error("Credenciales incorrectas. Verifique su correo y contraseña.")
+        
+        st.caption("🔒 Acceso seguro y privado para ejecutivos autorizados de Autivo.")
+
+    # Detener ejecución para que no se muestre el dashboard a usuarios no autenticados
+    st.stop()
+
+# ==============================================================================
+# USUARIO AUTENTICADO: CARGAR API KEY INVISIBLE EN SEGUNDO PLANO
+# ==============================================================================
+gemini_key = cargar_api_key_guardada()
+
+# ==============================================================================
+# BARRA LATERAL (PANEL DE CONTROL PRIVADO)
 # ==============================================================================
 with st.sidebar:
-    st.image("https://img.icons8.com/color/96/car--v1.png", width=64)
+    st.image("https://img.icons8.com/color/96/car--v1.png", width=54)
     st.title("Autivo QA")
-    st.caption("Auditoría Autónoma de Bots con Gemini 3.6 Flash")
-    st.markdown("---")
     
-    # 1. API Key de Gemini
-    st.subheader("🔑 Google Gemini API")
-    key_guardada = cargar_api_key_guardada()
-    gemini_key = st.text_input(
-        "Gemini API Key:",
-        value=key_guardada,
-        type="password",
-        help="Clave gratuita de Google AI Studio (https://aistudio.google.com)"
-    )
-    if gemini_key and gemini_key != key_guardada:
-        guardar_api_key(gemini_key)
-        st.success("✓ Clave guardada correctamente.")
+    # Identificación del usuario activo
+    usuario_sesion = st.session_state.get("usuario_actual", "santiagourrutiahojas@gmail.com")
+    st.markdown(f"👤 **Sesión:** `{usuario_sesion}`")
+    
+    if st.button("🚪 Cerrar Sesión", use_container_width=True):
+        st.session_state["autenticado"] = False
+        st.rerun()
 
     st.markdown("---")
     
-    # 2. Carga de Archivos
+    # Estado de la IA (Completamente oculta, sin mostrar la clave)
+    if gemini_key:
+        st.success("🟢 Motor Gemini 3.6 Flash: **Activo**")
+    else:
+        st.warning("⚠️ Clave API no detectada en Secrets.")
+
+    st.markdown("---")
+    
+    # Carga de Archivos
     st.subheader("📄 Subir Conversaciones (PDF)")
     archivos_subidos = st.file_uploader(
         "Arrastra uno o varios PDFs aquí:",
         type=["pdf", "txt", "zip"],
         accept_multiple_files=True,
-        help="Puedes subir el PDF de cualquier marca (Peugeot, Opel, Hyundai, Citroën, Fiat, etc.)"
+        help="Sube documentos de cualquier marca (Peugeot, Opel, Citroën, Hyundai, etc.)"
     )
 
     btn_evaluar = st.button("🚀 Iniciar Auditoría QA", type="primary", use_container_width=True)
 
     st.markdown("---")
     
-    # 3. Descargar Excel
+    # Descargar Excel
     if os.path.exists(CONFIG["REPORTE_EXCEL"]):
         try:
             with open(CONFIG["REPORTE_EXCEL"], "rb") as f:
@@ -122,9 +222,10 @@ with st.sidebar:
             pass
 
     st.markdown("---")
-    # 4. Reinicio de Historial
+    
+    # Opciones de reinicio
     with st.expander("⚙️ Empezar Nueva Marca / Reiniciar"):
-        st.caption("Borra las evaluaciones actuales para evaluar una marca nueva de cero:")
+        st.caption("Borra las evaluaciones actuales para auditar una nueva marca de cero:")
         if st.button("🗑️ Borrar Historial y Empezar de Cero", use_container_width=True):
             if os.path.exists(CONFIG["REPORTE_JSON"]):
                 with open(CONFIG["REPORTE_JSON"], "w", encoding="utf-8") as f:
@@ -142,13 +243,12 @@ with st.sidebar:
 # ==============================================================================
 if btn_evaluar:
     if not gemini_key:
-        st.error("⚠️ Por favor ingresa tu API Key de Gemini en la barra lateral para continuar.")
+        st.error("⚠️ No se encontró la API Key de Gemini configurada en Secrets.")
     else:
         carpeta_destino = CONFIG["CARPETA_PDFS"]
         os.makedirs(carpeta_destino, exist_ok=True)
         rutas_a_evaluar = []
 
-        # Si el usuario subió archivos en este momento, evaluar exclusivamente esos archivos
         if archivos_subidos:
             for archivo in archivos_subidos:
                 nombre = archivo.name
@@ -173,7 +273,6 @@ if btn_evaluar:
                         f_out.write(archivo.getbuffer())
                     rutas_a_evaluar.append(ruta_guardada)
 
-        # Barra de progreso
         st.info("⚡ Conectando con Google Gemini 3.6 Flash para auditar conversaciones...")
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -217,11 +316,11 @@ df = cargar_datos()
 # ==============================================================================
 # ENCABEZADO Y KPIS DEL DASHBOARD
 # ==============================================================================
-st.title("🚗 Auditoría Inteligente de Calidad (QA) Automotriz")
-st.markdown("Evaluación autónoma con IA para **Peugeot, Opel, Citroën, Fiat, Hyundai, JAC, Jeep, RAM y más**.")
+st.markdown("<div class='main-title'>🚗 Portal de Calidad (QA) Automotriz</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-title'>Auditoría inteligente multimarca para <b>Peugeot, Opel, Citroën, Fiat, Hyundai, JAC, Jeep, RAM y más</b>.</div>", unsafe_allow_html=True)
 
 if df.empty:
-    st.info("👋 **Aún no hay conversaciones auditadas.** Sube un archivo PDF o una transcripción en la barra lateral izquierda y presiona **'🚀 Iniciar Auditoría QA'** para comenzar.")
+    st.info("👋 **Aún no hay conversaciones auditadas.** Sube un archivo PDF o transcripción en la barra lateral izquierda y presiona **'🚀 Iniciar Auditoría QA'** para comenzar.")
 else:
     # Métricas principales
     total = len(df)
