@@ -105,22 +105,23 @@ CONFIG = {
 # ==============================================================================
 PROMPT_AUDITORIA_SISTEMA = """Eres un Auditor Senior de Control de Calidad (QA) para sistemas de ventas automotrices omnicanal (WhatsApp y Web) en Chile y Perú.
 
-Tu objetivo es auditar transcripciones reales (en documento PDF con capturas o texto) de forma 100% autónoma y objetiva.
+Tu objetivo es auditar transcripciones reales (en documento PDF con capturas o texto) de forma 100% autónoma, objetiva y justa.
 
 INSTRUCCIONES CLAVE:
 1. DETECCIÓN AUTÓNOMA DE MARCA Y VEHÍCULO:
    - Identifica la marca automotriz que se está comercializando (por ejemplo: Peugeot, Opel, Citroën, Fiat, Hyundai, JAC, Jeep, RAM, Geely, etc.). No asumas ninguna de antemano; reconócela por los nombres de vehículos (ej: Rifter, 208, 2008, Corsa, Mokka, C3, Tucson, Creta, Compass, Rampage, T60), logotipos o mensajes del bot.
    - Identifica el modelo y versión de vehículo cotizado o consultado.
 
-2. CRITERIOS ESTRICTOS DE EVALUACIÓN:
-   - 'Aprobado': El bot logró completar el flujo comercial (identificó el modelo, capturó los datos del cliente y confirmó la cotización o derivación a ejecutivo comercial).
-   - 'Rechazado': ÚNICAMENTE si ocurrió una falla real del bot dentro de estas categorías:
+2. CRITERIOS DE EVALUACIÓN (JUSTICIA Y REALISMO):
+   - 'Aprobado':
+     * El bot logró completar el flujo comercial (identificó el modelo, capturó los datos del cliente y confirmó la cotización o derivación a ejecutivo).
+     * REGLA DE ABANDONO DEL CLIENTE: Si el bot respondió cordialmente, formuló una pregunta válida o presentó el menú de opciones del catálogo, y la conversación simplemente se detuvo porque el cliente/usuario dejó de contestar, no hizo clic o abandonó el celular por su cuenta, ESTO NO ES ERROR DEL BOT. En tal caso, califica como 'Aprobado' con categoria_falla 'Ninguna' y observación destacando que el bot atendió correctamente hasta el abandono voluntario del usuario.
+   
+   - 'Rechazado': ÚNICAMENTE ante fallas reales, técnicas o comerciales imputables al BOT:
      a) 'Bucle de Validación': El bot se queda estancado repitiendo preguntas o menús sin entender respuestas válidas o texto libre del usuario.
-     b) 'Abandono por Falla del Bot': El bot dejó de responder, se congeló o la conversación terminó frustrada antes de cerrar la cotización por falta de comprensión del asistente.
-     c) 'Alucinación o Error de Catálogo': El bot ofrece modelos de otra marca no perteneciente, inventa precios o da datos erróneos.
-     d) 'Lead Incompleto': El usuario mostró intención de cotizar pero el bot nunca confirmó la solicitud ni tomó los datos finales.
-     e) 'Frustración del Cliente': El cliente reclama explícitamente por la mala atención o pide hablar con un humano por incapacidad del bot.
-   (Nota: Si fue el cliente quien dejó de contestar por desinterés sin que el bot fallara, NO inventes errores: marca como Aprobado o Abandono de cliente sin castigar al bot).
+     b) 'Falla Técnica del Bot': El bot dejó de responder en medio de una respuesta, se congeló o arrojó un error de sistema interno.
+     c) 'Alucinación o Error de Catálogo': El bot ofrece modelos de otra marca no perteneciente, inventa precios o da datos erróneos de financiamiento.
+     d) 'Frustración del Cliente': El cliente reclama explícitamente por la mala atención o pide hablar con un humano por incapacidad del bot de asistirlo.
 
 3. FORMATO DE RESPUESTA:
 Responde EXCLUSIVAMENTE con un JSON válido con esta estructura:
@@ -129,7 +130,7 @@ Responde EXCLUSIVAMENTE con un JSON válido con esta estructura:
   "pais": "Chile | Perú | Desconocido",
   "canal": "WhatsApp | Web | Desconocido",
   "estado": "Aprobado | Rechazado",
-  "categoria_falla": "Ninguna | Bucle de Validación | Abandono por Falla del Bot | Alucinación o Error de Catálogo | Lead Incompleto | Frustración del Cliente",
+  "categoria_falla": "Ninguna | Bucle de Validación | Falla Técnica del Bot | Alucinación o Error de Catálogo | Frustración del Cliente",
   "cliente_nombre": "Nombre del cliente si aparece o 'No detectado'",
   "vehiculo_cotizado": "Modelo identificado o 'No detectado'",
   "errores": ["descripción clara del fallo si hubo alguno"],
@@ -137,53 +138,60 @@ Responde EXCLUSIVAMENTE con un JSON válido con esta estructura:
 }"""
 
 # ==============================================================================
-# LLAMADAS A GOOGLE GEMINI (REST v1beta NATIVO)
+# LLAMADAS A GOOGLE GEMINI (REST v1beta CON REINTENTO Y EXPONENTIAL BACKOFF)
 # ==============================================================================
-def llamar_gemini_api(partes: List[Dict[str, Any]], api_key: str) -> str:
-    """Envía la solicitud a Google Gemini vía REST oficial v1beta."""
+def llamar_gemini_api(partes: List[Dict[str, Any]], api_key: str, max_reintentos_por_modelo: int = 3) -> str:
+    """Envía la solicitud a Google Gemini vía REST oficial v1beta con reintentos y tolerancia a fallos."""
     ultimo_error = ""
     for modelo in CONFIG["MODELOS_GEMINI"]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key.strip()}"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key.strip()
-        }
-        payload = {
-            "contents": [{
-                "role": "user",
-                "parts": partes
-            }],
-            "generationConfig": {
-                "temperature": 0.1
+        for intento in range(max_reintentos_por_modelo):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={api_key.strip()}"
+            headers = {
+                "Content-Type": "application/json"
             }
-        }
+            payload = {
+                "contents": [{
+                    "role": "user",
+                    "parts": partes
+                }],
+                "generationConfig": {
+                    "temperature": 0.1
+                }
+            }
 
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers=headers,
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=CONFIG["TIMEOUT_SEGUNDOS"]) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    candidatos = data.get("candidates", [])
-                    if candidatos:
-                        partes_resp = candidatos[0].get("content", {}).get("parts", [])
-                        textos = [p.get("text", "") for p in partes_resp if "text" in p]
-                        return "\n".join(textos)
-        except urllib.error.HTTPError as e:
-            cuerpo = e.read().decode("utf-8", errors="ignore")
-            ultimo_error = f"HTTP {e.code}: {cuerpo}"
-            if e.code in [404, 503, 429]:
-                # Probar el siguiente modelo disponible
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers,
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=CONFIG["TIMEOUT_SEGUNDOS"]) as resp:
+                    if resp.status == 200:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        candidatos = data.get("candidates", [])
+                        if candidatos:
+                            partes_resp = candidatos[0].get("content", {}).get("parts", [])
+                            textos = [p.get("text", "") for p in partes_resp if "text" in p]
+                            return "\n".join(textos)
+            except urllib.error.HTTPError as e:
+                cuerpo = e.read().decode("utf-8", errors="ignore")
+                ultimo_error = f"HTTP {e.code}: {cuerpo}"
+                if e.code == 429:
+                    # Límite por minuto alcanzado temporalmente: pausar y reintentar con backoff exponencial
+                    espera = 4 * (intento + 1)
+                    print(f"  [!] Cuota temporal alcanzada (HTTP 429) en {modelo}. Pausando {espera}s antes de reintentar (intento {intento+1}/{max_reintentos_por_modelo})...")
+                    time.sleep(espera)
+                    continue
+                elif e.code in [404, 503]:
+                    # Modelo no disponible o sobrecargado, pasar al siguiente modelo
+                    break
+                else:
+                    break
+            except Exception as e:
+                ultimo_error = str(e)
+                time.sleep(2 * (intento + 1))
                 continue
-            else:
-                break
-        except Exception as e:
-            ultimo_error = str(e)
-            continue
 
     raise RuntimeError(ultimo_error or "No se pudo comunicar con Google Gemini.")
 
@@ -532,9 +540,9 @@ def procesar_pipeline(
         if i % 3 == 0 or i == total_evaluar:
             generar_reportes(resultados, CONFIG["REPORTE_EXCEL"], CONFIG["REPORTE_JSON"])
 
-        # Breve pausa para respetar la cuota gratuita
+        # Pausa para respetar la cuota gratuita de peticiones de Google AI Studio
         if i < total_evaluar:
-            time.sleep(2.0)
+            time.sleep(3.0)
 
     generar_reportes(resultados, CONFIG["REPORTE_EXCEL"], CONFIG["REPORTE_JSON"])
     return True, f"Se evaluaron {total_evaluar} archivos exitosamente."

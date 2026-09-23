@@ -74,6 +74,36 @@ def obtener_logo_html(tipo: str = "negro", ancho: int = 220) -> str:
     sub_color = "#64748B" if tipo == "negro" else "#94A3B8"
     return f"""<div style="font-family:'Plus Jakarta Sans', sans-serif; text-align:center;"><span style="font-size:1.6rem; font-weight:800; color:{color}; letter-spacing:-0.5px;">autivo</span><div style="font-size:0.75rem; font-weight:600; color:{sub_color}; letter-spacing:1px; text-transform:lowercase; margin-top:-4px;">ai based solutions</div></div>"""
 
+# ==============================================================================
+# PALETAS DE COLOR CORPORATIVAS (MARCAS AUTOMOTRICES Y CAUSAS DE FALLA)
+# ==============================================================================
+COLORES_MARCAS = {
+    "Hyundai": "#002C6C",     # Azul marino Hyundai
+    "Jac": "#DC2626",         # Rojo JAC
+    "JAC": "#DC2626",
+    "Jeep": "#15803D",        # Verde bosque Jeep
+    "Opel": "#F59E0B",        # Amarillo / Ámbar Opel
+    "Peugeot": "#2563EB",     # Azul eléctrico Peugeot
+    "Citroën": "#991B1B",     # Granate Citroën
+    "Fiat": "#EF4444",        # Rojo Fiat
+    "RAM": "#475569",         # Carbón RAM
+    "Geely": "#06B6D4",       # Celeste Geely
+    "Lippi": "#7C3AED",       # Morado Lippi
+    "Omni": "#4F46E5",        # Índigo Omni
+    "Todas": "#1A62E8"
+}
+
+COLORES_FALLAS = {
+    "Bucle de Validación": "#EF4444",
+    "Falla Técnica del Bot": "#DC2626",
+    "Alucinación o Error de Catálogo": "#F59E0B",
+    "Frustración del Cliente": "#EC4899",
+    "Lead Incompleto": "#8B5CF6",
+    "Abandono por Falla del Bot": "#F97316",
+    "Error de API Gemini": "#64748B",
+    "Otro": "#3B82F6"
+}
+
 
 # ==============================================================================
 # ESTILOS CSS GLOBALES (HOMOGÉNEOS CON EL PORTAL AUTIVO)
@@ -790,70 +820,88 @@ if seccion_seleccionada == "🏠 Home":
     st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
     # --------------------------------------------------------------------------
-    # 4. GRÁFICO PRINCIPAL: CONVERSATIONS & INTERACTIONS (CURVA VERDE Y AZUL)
+    # 4. GRÁFICO PRINCIPAL: CONVERSATIONS & INTERACTIONS (DINÁMICO POR MARCA)
     # --------------------------------------------------------------------------
     st.markdown("""
-    <div class="autivo-card" style="padding-bottom:12px;">
+    <div class="autivo-card" style="padding-bottom:14px;">
         <div class="autivo-card-title">
-            Conversations & Interactions
+            Conversations & Interactions - Efectividad y Volumen por Marca
         </div>
     """, unsafe_allow_html=True)
 
-    # Construir datos para gráfico idéntico a la captura
-    fechas_eje = ["Sep 16", "Sep 17", "Sep 18"]
+    df_validas = df_actual[df_actual["marca"] != "Error de Conexión"] if not df_actual.empty and "marca" in df_actual.columns else pd.DataFrame()
     
-    # Simular o interpolar con datos reales
-    base_val = max(total_convs, 1)
-    df_chart = pd.DataFrame({
-        "Fecha": fechas_eje,
-        "Total Conversations": [base_val * 40, base_val * 25, base_val * 15],
-        "Interactions": [base_val * 380, base_val * 290, base_val * 85]
-    })
+    if not df_validas.empty:
+        # Calcular métricas dinámicas directamente vinculadas a los porcentajes reales de cada bot
+        filas_marcas = []
+        for m, grupo in df_validas.groupby("marca"):
+            cnt = len(grupo)
+            aprob = len(grupo[grupo["estado"] == "Aprobado"])
+            pct = (aprob / cnt * 100) if cnt > 0 else 0.0
+            filas_marcas.append({
+                "Marca": f"Bot {m}",
+                "Marca_Simple": m,
+                "Efectividad (%)": round(pct, 1),
+                "Conversaciones": cnt,
+                "Aprobadas": aprob,
+                "Rechazadas": cnt - aprob
+            })
+        
+        df_chart_marcas = pd.DataFrame(filas_marcas).sort_values(by="Efectividad (%)", ascending=True)
 
-    # Renderizado con Altair para máxima fidelidad visual con media_1790131589109.png
-    chart_interactions = alt.Chart(df_chart).mark_area(
-        color="#10B981",
-        opacity=0.18,
-        interpolate='monotone',
-        line={'color': '#10B981', 'width': 2.5}
-    ).encode(
-        x=alt.X('Fecha:N', title=None, axis=alt.Axis(labelAngle=0, labelColor='#64748B', tickColor='transparent', domainColor='#E2E8F0')),
-        y=alt.Y('Interactions:Q', title=None, axis=alt.Axis(labelColor='#64748B', tickColor='transparent', domainColor='#E2E8F0', gridColor='#F1F5F9')),
-        tooltip=['Fecha', 'Interactions']
-    )
+        # Gráfico dinámico: Barras de volumen de interacción + Curva con puntos de efectividad (% OK)
+        chart_base = alt.Chart(df_chart_marcas).encode(
+            x=alt.X('Marca:N', title=None, axis=alt.Axis(labelAngle=0, labelColor='#475569', labelFontWeight='bold')),
+            color=alt.Color('Marca_Simple:N', scale=alt.Scale(domain=list(COLORES_MARCAS.keys()), range=list(COLORES_MARCAS.values())), legend=None)
+        )
 
-    chart_conversations = alt.Chart(df_chart).mark_line(
-        color="#1A62E8",
-        strokeWidth=2.5,
-        interpolate='monotone'
-    ).encode(
-        x=alt.X('Fecha:N'),
-        y=alt.Y('Total Conversations:Q'),
-        tooltip=['Fecha', 'Total Conversations']
-    )
+        chart_bars = chart_base.mark_bar(opacity=0.28, cornerRadiusTopLeft=8, cornerRadiusTopRight=8).encode(
+            y=alt.Y('Conversaciones:Q', title='Volumen de Conversaciones', axis=alt.Axis(labelColor='#475569', gridColor='#F1F5F9'))
+        )
 
-    combined_chart = (chart_interactions + chart_conversations).properties(
-        height=280
-    ).configure_view(
-        strokeOpacity=0
-    )
+        chart_lines = chart_base.mark_line(
+            point=alt.OverlayMarkDef(filled=True, size=110),
+            strokeWidth=3,
+            interpolate='monotone'
+        ).encode(
+            y=alt.Y('Efectividad (%):Q', scale=alt.Scale(domain=[0, 105]), title='Tasa de Efectividad (% OK)', axis=alt.Axis(labelColor='#1A62E8', gridColor='#F1F5F9')),
+            tooltip=['Marca', 'Efectividad (%)', 'Conversaciones', 'Aprobadas', 'Rechazadas']
+        )
 
-    st.altair_chart(combined_chart, use_container_width=True)
+        combined_chart = (chart_bars + chart_lines).resolve_scale(
+            y='independent'
+        ).properties(
+            height=280
+        ).configure_view(
+            strokeOpacity=0
+        )
 
-    # Leyenda idéntica a la captura
-    st.markdown("""
-    <div style="display:flex; justify-content:center; align-items:center; gap:24px; font-size:0.82rem; font-weight:600; color:#475569; margin-top:-6px; margin-bottom:10px;">
-        <div style="display:flex; align-items:center; gap:6px;">
-            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#1A62E8;"></span>
-            <span>Total Conversations</span>
+        st.altair_chart(combined_chart, use_container_width=True)
+
+        # Leyenda dinámica con colores corporativos y porcentajes exactos de cada marca
+        legend_items_html = ""
+        for _, row in df_chart_marcas.iterrows():
+            m_nombre = row["Marca"]
+            m_simple = row["Marca_Simple"]
+            color = COLORES_MARCAS.get(m_simple, "#1A62E8")
+            pct_val = row["Efectividad (%)"]
+            cnt_val = row["Conversaciones"]
+            legend_items_html += f"""
+            <div style="display:flex; align-items:center; gap:6px;">
+                <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:{color};"></span>
+                <span><b>{m_nombre}</b>: {pct_val}% OK ({cnt_val} chats)</span>
+            </div>
+            """
+
+        st.markdown(f"""
+        <div style="display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:20px; font-size:0.82rem; color:#475569; margin-top:-4px; margin-bottom:8px;">
+            {legend_items_html}
         </div>
-        <div style="display:flex; align-items:center; gap:6px;">
-            <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#10B981;"></span>
-            <span>Interactions</span>
         </div>
-    </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    else:
+        st.info("👋 Sube y audita PDFs para visualizar las curvas y efectividad por marca.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # --------------------------------------------------------------------------
     # 5. FILA INFERIOR DIVIDIDA: TOP THEMES & START MENU BUTTON CLICKS
@@ -967,9 +1015,18 @@ elif seccion_seleccionada == "💬 Recurrent Themes":
                 <div class="autivo-card-title">Distribución por Causa de Falla</div>
             """, unsafe_allow_html=True)
             if "categoria_falla" in df_global.columns:
-                fallas = df_global[df_global["estado"] == "Rechazado"]["categoria_falla"].value_counts()
-                if not fallas.empty:
-                    st.bar_chart(fallas, color="#1A62E8")
+                df_fallas_raw = df_global[(df_global["estado"] == "Rechazado") & (df_global["categoria_falla"] != "Ninguna")]
+                if not df_fallas_raw.empty:
+                    fallas_df = df_fallas_raw["categoria_falla"].value_counts().reset_index()
+                    fallas_df.columns = ["Causa de Falla", "Cantidad"]
+                    
+                    chart_f = alt.Chart(fallas_df).mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6).encode(
+                        x=alt.X("Causa de Falla:N", title=None, axis=alt.Axis(labelAngle=-25, labelColor="#475569", labelFontWeight="bold")),
+                        y=alt.Y("Cantidad:Q", title="Ocurrencias", axis=alt.Axis(labelColor="#475569", gridColor="#F1F5F9")),
+                        color=alt.Color("Causa de Falla:N", scale=alt.Scale(domain=list(COLORES_FALLAS.keys()), range=list(COLORES_FALLAS.values())), legend=None),
+                        tooltip=["Causa de Falla", "Cantidad"]
+                    ).properties(height=280)
+                    st.altair_chart(chart_f, use_container_width=True)
                 else:
                     st.success("✓ No se registraron fallas en las conversaciones evaluadas.")
             st.markdown("</div>", unsafe_allow_html=True)
@@ -980,8 +1037,20 @@ elif seccion_seleccionada == "💬 Recurrent Themes":
                 <div class="autivo-card-title">Volumen de Auditoría por Marca</div>
             """, unsafe_allow_html=True)
             if "marca" in df_global.columns:
-                marcas_cnt = df_global["marca"].value_counts()
-                st.bar_chart(marcas_cnt, color="#10B981")
+                df_marcas_raw = df_global[df_global["marca"] != "Error de Conexión"]
+                if not df_marcas_raw.empty:
+                    marcas_df = df_marcas_raw["marca"].value_counts().reset_index()
+                    marcas_df.columns = ["Marca", "Evaluaciones"]
+                    
+                    chart_m = alt.Chart(marcas_df).mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6).encode(
+                        x=alt.X("Marca:N", title=None, axis=alt.Axis(labelAngle=-25, labelColor="#475569", labelFontWeight="bold")),
+                        y=alt.Y("Evaluaciones:Q", title="Total Evaluadas", axis=alt.Axis(labelColor="#475569", gridColor="#F1F5F9")),
+                        color=alt.Color("Marca:N", scale=alt.Scale(domain=list(COLORES_MARCAS.keys()), range=list(COLORES_MARCAS.values())), legend=None),
+                        tooltip=["Marca", "Evaluaciones"]
+                    ).properties(height=280)
+                    st.altair_chart(chart_m, use_container_width=True)
+                else:
+                    st.info("Sin marcas auditadas aún.")
             st.markdown("</div>", unsafe_allow_html=True)
 
 
