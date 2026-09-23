@@ -498,7 +498,24 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("<div style='height: 30px;'></div>", unsafe_allow_html=True)
+    with st.expander("🔑 Conexión Gemini API", expanded=not bool(gemini_key)):
+        st.caption("Pega o actualiza tu clave de Google Gemini:")
+        clave_ingresada_sidebar = st.text_input(
+            "API Key Gemini",
+            value=st.session_state.get("gemini_api_key", ""),
+            type="password",
+            placeholder="Pega tu clave de Gemini aquí...",
+            label_visibility="collapsed"
+        )
+        if st.button("🔌 Conectar Clave", use_container_width=True):
+            if clave_ingresada_sidebar.strip():
+                st.session_state["gemini_api_key"] = clave_ingresada_sidebar.strip()
+                from procesar_pdf import guardar_api_key
+                guardar_api_key(clave_ingresada_sidebar.strip())
+                st.success("✓ Clave conectada exitosamente.")
+                st.rerun()
+
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
     st.markdown("<hr/>", unsafe_allow_html=True)
 
     # Pie del Sidebar (Organization view & Logout idéntico a la captura)

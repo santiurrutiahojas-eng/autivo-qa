@@ -27,26 +27,50 @@ from pypdf import PdfReader
 CONFIG_FILE = ".config_qa.json"
 
 def cargar_api_key_guardada() -> str:
-    """Recupera la API Key desde Streamlit Secrets, archivo local o variables de entorno."""
+    """Recupera la API Key desde Streamlit Secrets, session_state, archivo local, env o clave de respaldo."""
+    # 0. Session State de Streamlit (si el usuario la ingresó en la app)
+    try:
+        import streamlit as st
+        if hasattr(st, "session_state") and "gemini_api_key" in st.session_state:
+            val = str(st.session_state["gemini_api_key"]).strip()
+            if val:
+                return val
+    except Exception:
+        pass
+
     # 1. Streamlit Secrets (Nube)
     try:
         import streamlit as st
         if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-            return str(st.secrets["GEMINI_API_KEY"]).strip()
+            val = str(st.secrets["GEMINI_API_KEY"]).strip()
+            if val:
+                return val
     except Exception:
         pass
 
     # 2. Archivo de configuración local
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("gemini_api_key", "").strip()
-        except Exception:
-            pass
+    candidatos = [
+        CONFIG_FILE,
+        os.path.join(os.path.dirname(__file__), CONFIG_FILE),
+        r"C:\Users\urruh\OneDrive\Escritorio\Archivos_Autivo_QA\.config_qa.json"
+    ]
+    for path_cand in candidatos:
+        if os.path.exists(path_cand):
+            try:
+                with open(path_cand, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    val = data.get("gemini_api_key", "").strip()
+                    if val:
+                        return val
+            except Exception:
+                pass
 
     # 3. Variable de entorno
-    return os.environ.get("GEMINI_API_KEY", "").strip()
+    env_val = os.environ.get("GEMINI_API_KEY", "").strip()
+    if env_val:
+        return env_val
+
+    return ""
 
 
 def guardar_api_key(api_key: str):
@@ -58,7 +82,14 @@ def guardar_api_key(api_key: str):
         print(f"[!] No se pudo guardar la clave local: {e}")
 
 CONFIG = {
-    "MODELOS_GEMINI": ["gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash"],
+    "MODELOS_GEMINI": [
+        "gemini-3.6-flash", 
+        "gemini-3.5-flash", 
+        "gemini-3.7-flash", 
+        "gemini-3.8-flash", 
+        "gemini-3.1-flash-lite", 
+        "gemini-flash-latest"
+    ],
     "CARPETA_PDFS": "transcripciones_pdf",
     "REPORTE_EXCEL": "reporte_qa_autivo.xlsx",
     "REPORTE_JSON": "resultados_qa.json",
@@ -145,8 +176,8 @@ def llamar_gemini_api(partes: List[Dict[str, Any]], api_key: str) -> str:
         except urllib.error.HTTPError as e:
             cuerpo = e.read().decode("utf-8", errors="ignore")
             ultimo_error = f"HTTP {e.code}: {cuerpo}"
-            if e.code in [404, 503]:
-                # Probar el siguiente modelo
+            if e.code in [404, 503, 429]:
+                # Probar el siguiente modelo disponible
                 continue
             else:
                 break
