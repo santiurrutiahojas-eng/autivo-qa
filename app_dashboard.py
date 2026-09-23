@@ -822,86 +822,100 @@ if seccion_seleccionada == "🏠 Home":
     # --------------------------------------------------------------------------
     # 4. GRÁFICO PRINCIPAL: CONVERSATIONS & INTERACTIONS (DINÁMICO POR MARCA)
     # --------------------------------------------------------------------------
-    st.markdown("""
-    <div class="autivo-card" style="padding-bottom:14px;">
-        <div class="autivo-card-title">
-            Conversations & Interactions - Efectividad y Volumen por Marca
-        </div>
-    """, unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(
+            '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">'
+            '<span style="font-size:1.05rem; font-weight:700; color:#0F172A;">Conversations & Interactions - Rendimiento y Volumen por Marca</span>'
+            '<span style="font-size:0.8rem; font-weight:600; color:#1A62E8; background:#EFF6FF; border:1px solid #DBEAFE; padding:4px 10px; border-radius:12px;">📊 Enlace en vivo con auditorías</span>'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
-    df_validas = df_actual[df_actual["marca"] != "Error de Conexión"] if not df_actual.empty and "marca" in df_actual.columns else pd.DataFrame()
-    
-    if not df_validas.empty:
-        # Calcular métricas dinámicas directamente vinculadas a los porcentajes reales de cada bot
-        filas_marcas = []
-        for m, grupo in df_validas.groupby("marca"):
-            cnt = len(grupo)
-            aprob = len(grupo[grupo["estado"] == "Aprobado"])
-            pct = (aprob / cnt * 100) if cnt > 0 else 0.0
-            filas_marcas.append({
-                "Marca": f"Bot {m}",
-                "Marca_Simple": m,
-                "Efectividad (%)": round(pct, 1),
-                "Conversaciones": cnt,
-                "Aprobadas": aprob,
-                "Rechazadas": cnt - aprob
-            })
+        df_validas = df_actual[df_actual["marca"] != "Error de Conexión"] if not df_actual.empty and "marca" in df_actual.columns else pd.DataFrame()
         
-        df_chart_marcas = pd.DataFrame(filas_marcas).sort_values(by="Efectividad (%)", ascending=True)
+        if not df_validas.empty:
+            # Calcular métricas dinámicas directamente vinculadas a los porcentajes reales de cada bot
+            filas_marcas = []
+            for m, grupo in df_validas.groupby("marca"):
+                cnt = len(grupo)
+                aprob = len(grupo[grupo["estado"] == "Aprobado"])
+                pct = (aprob / cnt * 100) if cnt > 0 else 0.0
+                filas_marcas.append({
+                    "Marca": f"Bot {m}",
+                    "Marca_Simple": m,
+                    "Efectividad (%)": round(pct, 1),
+                    "Conversaciones": cnt,
+                    "Aprobadas": aprob,
+                    "Rechazadas": cnt - aprob
+                })
+            
+            df_chart_marcas = pd.DataFrame(filas_marcas).sort_values(by="Efectividad (%)", ascending=True)
 
-        # Gráfico dinámico: Barras de volumen de interacción + Curva con puntos de efectividad (% OK)
-        chart_base = alt.Chart(df_chart_marcas).encode(
-            x=alt.X('Marca:N', title=None, axis=alt.Axis(labelAngle=0, labelColor='#475569', labelFontWeight='bold')),
-            color=alt.Color('Marca_Simple:N', scale=alt.Scale(domain=list(COLORES_MARCAS.keys()), range=list(COLORES_MARCAS.values())), legend=None)
-        )
+            # Capa base
+            chart_base = alt.Chart(df_chart_marcas).encode(
+                x=alt.X('Marca:N', title=None, axis=alt.Axis(labelAngle=0, labelColor='#334155', labelFontWeight='bold', labelFontSize=12))
+            )
 
-        chart_bars = chart_base.mark_bar(opacity=0.28, cornerRadiusTopLeft=8, cornerRadiusTopRight=8).encode(
-            y=alt.Y('Conversaciones:Q', title='Volumen de Conversaciones', axis=alt.Axis(labelColor='#475569', gridColor='#F1F5F9'))
-        )
+            # Barras individuales por marca con su color corporativo
+            chart_bars = chart_base.mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8, size=46, opacity=0.85).encode(
+                y=alt.Y('Efectividad (%):Q', title='Efectividad (% Aprobadas)', scale=alt.Scale(domain=[0, 115]), axis=alt.Axis(gridColor='#F1F5F9', labelColor='#64748B')),
+                color=alt.Color('Marca_Simple:N', scale=alt.Scale(domain=list(COLORES_MARCAS.keys()), range=list(COLORES_MARCAS.values())), legend=None),
+                tooltip=['Marca', 'Efectividad (%)', 'Conversaciones', 'Aprobadas', 'Rechazadas']
+            )
 
-        chart_lines = chart_base.mark_line(
-            point=alt.OverlayMarkDef(filled=True, size=110),
-            strokeWidth=3,
-            interpolate='monotone'
-        ).encode(
-            y=alt.Y('Efectividad (%):Q', scale=alt.Scale(domain=[0, 105]), title='Tasa de Efectividad (% OK)', axis=alt.Axis(labelColor='#1A62E8', gridColor='#F1F5F9')),
-            tooltip=['Marca', 'Efectividad (%)', 'Conversaciones', 'Aprobadas', 'Rechazadas']
-        )
+            # Etiqueta de porcentaje exacto sobre cada barra
+            chart_text = chart_base.mark_text(dy=-10, fontSize=12, fontWeight='bold', color='#1E293B').encode(
+                y=alt.Y('Efectividad (%):Q'),
+                text=alt.Text('Efectividad (%):Q', format='.1f')
+            )
 
-        combined_chart = (chart_bars + chart_lines).resolve_scale(
-            y='independent'
-        ).properties(
-            height=280
-        ).configure_view(
-            strokeOpacity=0
-        )
+            # Línea conectora de tendencia
+            chart_line = chart_base.mark_line(color='#1A62E8', strokeWidth=3, interpolate='monotone', opacity=0.55).encode(
+                y=alt.Y('Efectividad (%):Q')
+            )
 
-        st.altair_chart(combined_chart, use_container_width=True)
+            # Puntos destacados de cada marca
+            chart_points = chart_base.mark_circle(size=130, opacity=1).encode(
+                y=alt.Y('Efectividad (%):Q'),
+                color=alt.Color('Marca_Simple:N', scale=alt.Scale(domain=list(COLORES_MARCAS.keys()), range=list(COLORES_MARCAS.values())), legend=None),
+                tooltip=['Marca', 'Efectividad (%)', 'Conversaciones', 'Aprobadas', 'Rechazadas']
+            )
 
-        # Leyenda dinámica con colores corporativos y porcentajes exactos de cada marca
-        legend_items_html = ""
-        for _, row in df_chart_marcas.iterrows():
-            m_nombre = row["Marca"]
-            m_simple = row["Marca_Simple"]
-            color = COLORES_MARCAS.get(m_simple, "#1A62E8")
-            pct_val = row["Efectividad (%)"]
-            cnt_val = row["Conversaciones"]
-            legend_items_html += f"""
-            <div style="display:flex; align-items:center; gap:6px;">
-                <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:{color};"></span>
-                <span><b>{m_nombre}</b>: {pct_val}% OK ({cnt_val} chats)</span>
-            </div>
-            """
+            # Línea de meta de referencia Autivo (80%)
+            df_rule = pd.DataFrame({'y': [80]})
+            chart_rule = alt.Chart(df_rule).mark_rule(strokeDash=[4, 4], color='#94A3B8', strokeWidth=1.5).encode(y='y:Q')
+            df_rule_txt = pd.DataFrame({'y': [82], 'text': ['Meta Óptima (80%)']})
+            chart_rule_text = alt.Chart(df_rule_txt).mark_text(align='left', dx=10, color='#64748B', fontSize=10, fontWeight=600).encode(y='y:Q', text='text:N')
 
-        st.markdown(f"""
-        <div style="display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:20px; font-size:0.82rem; color:#475569; margin-top:-4px; margin-bottom:8px;">
-            {legend_items_html}
-        </div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("👋 Sube y audita PDFs para visualizar las curvas y efectividad por marca.")
-        st.markdown("</div>", unsafe_allow_html=True)
+            final_chart = (chart_bars + chart_text + chart_line + chart_points + chart_rule + chart_rule_text).properties(
+                height=300
+            ).configure_view(
+                strokeOpacity=0
+            )
+
+            st.altair_chart(final_chart, use_container_width=True)
+
+            # Leyenda tipo píldoras corporativas (sin indentación de markdown para renderizar HTML directo)
+            legend_pills = []
+            for _, row in df_chart_marcas.iterrows():
+                m_nombre = row["Marca"]
+                m_simple = row["Marca_Simple"]
+                color = COLORES_MARCAS.get(m_simple, "#1A62E8")
+                pct_val = row["Efectividad (%)"]
+                cnt_val = row["Conversaciones"]
+                legend_pills.append(
+                    f'<span style="display:inline-flex; align-items:center; gap:6px; background:#F8FAFC; border:1px solid #E2E8F0; padding:4px 12px; border-radius:20px; font-size:0.82rem; color:#334155; margin:3px;">'
+                    f'<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:{color};"></span>'
+                    f'<b>{m_nombre}</b>: {pct_val}% OK ({cnt_val} chats)'
+                    f'</span>'
+                )
+            legend_html = "".join(legend_pills)
+            st.markdown(
+                f'<div style="display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:4px; margin-top:8px; margin-bottom:4px;">{legend_html}</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.info("👋 Sube y audita PDFs para visualizar las curvas y efectividad por marca.")
 
     # --------------------------------------------------------------------------
     # 5. FILA INFERIOR DIVIDIDA: TOP THEMES & START MENU BUTTON CLICKS
