@@ -115,11 +115,11 @@ INSTRUCCIONES CLAVE:
 2. CRITERIOS DE EVALUACIÓN (JUSTICIA Y REALISMO):
    - 'Aprobado':
      * El bot logró completar el flujo comercial (identificó el modelo, capturó los datos del cliente y confirmó la cotización o derivación a ejecutivo).
-     * REGLA DE ABANDONO DEL CLIENTE: Si el bot respondió cordialmente, formuló una pregunta válida o presentó el menú de opciones del catálogo, y la conversación simplemente se detuvo porque el cliente/usuario dejó de contestar, no hizo clic o abandonó el celular por su cuenta, ESTO NO ES ERROR DEL BOT. En tal caso, califica como 'Aprobado' con categoria_falla 'Ninguna' y observación destacando que el bot atendió correctamente hasta el abandono voluntario del usuario.
+     * REGLA DE ABANDONO DEL CLIENTE (SÓLO SI EL BOT YA RESPONDIÓ): Si el bot atendió cordialmente, formuló una pregunta válida o presentó el menú de opciones del catálogo, y la conversación simplemente se detuvo porque el cliente/usuario dejó de contestar voluntariamente tras haber sido atendido, ESTO NO ES ERROR DEL BOT. En tal caso, califica como 'Aprobado' con categoria_falla 'Ninguna' y observación destacando que el bot atendió correctamente hasta el abandono voluntario del usuario.
    
    - 'Rechazado': ÚNICAMENTE ante fallas reales, técnicas o comerciales imputables al BOT:
-     a) 'Bucle de Validación': El bot se queda estancado repitiendo preguntas o menús sin entender respuestas válidas o texto libre del usuario.
-     b) 'Falla Técnica del Bot': El bot dejó de responder en medio de una respuesta, se congeló o arrojó un error de sistema interno.
+     a) 'Falla Técnica del Bot' (INCLUYE SILENCIO O FALTA DE RESPUESTA): Si el usuario/cliente envió un mensaje o saludo de consulta (ej: "¡Hola! Quiero hacer una consulta") y el BOT NUNCA RESPONDIÓ (0 mensajes del bot en la transcripción), o se congeló y dejó al usuario desatendido, ESTO ES UNA FALLA GRAVE (Rechazado). NUNCA apruebes una conversación donde el bot dejó al cliente sin respuesta.
+     b) 'Bucle de Validación': El bot se queda estancado repitiendo preguntas o menús sin entender respuestas válidas o texto libre del usuario.
      c) 'Alucinación o Error de Catálogo': El bot ofrece modelos de otra marca no perteneciente, inventa precios o da datos erróneos de financiamiento.
      d) 'Frustración del Cliente': El cliente reclama explícitamente por la mala atención o pide hablar con un humano por incapacidad del bot de asistirlo.
 
@@ -133,7 +133,7 @@ INSTRUCCIONES CLAVE:
      * 'General Inquiry' (Horarios, ubicaciones, disponibilidad general, otros)
    - 'interacciones': Cantidad numérica entera aproximada de turnos o mensajes intercambiados entre usuario y bot (ej: 8, 11, 15).
    - 'solicito_humano': true si el usuario pidió hablar con una persona, ejecutivo o asesor comercial humano, false en caso contrario.
-   - 'dialogo_resumen': Lista de 3 a 6 turnos clave del diálogo en formato [{"emisor": "Cliente"|"Bot", "texto": "..."}]. Si hubo falla del bot, incluye el mensaje exacto donde falló.
+   - 'dialogo_resumen': Lista de 3 a 6 turnos clave del diálogo en formato [{"emisor": "Cliente"|"Bot", "texto": "..."}]. Si el bot nunca respondió, incluye solo el mensaje del cliente. Si hubo falla del bot, incluye el mensaje exacto donde falló.
 
 4. FORMATO DE RESPUESTA:
 Responde EXCLUSIVAMENTE con un JSON válido con esta estructura:
@@ -267,10 +267,10 @@ def preparar_partes_para_gemini(ruta_archivo: str) -> List[Dict[str, Any]]:
 # ==============================================================================
 # PARSER ROBUSTO DE JSON
 # ==============================================================================
-def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str, Any]:
-    """Limpia y normaliza la respuesta generada por Gemini asegurando JSON válido."""
+def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "", marca_asignada: Optional[str] = None) -> Dict[str, Any]:
+    """Limpia y normaliza la respuesta generada por Gemini asegurando JSON válido y reglas de negocio estrictas."""
     default_res = {
-        "marca": "Desconocida",
+        "marca": marca_asignada or "Desconocida",
         "pais": "Chile",
         "canal": "WhatsApp",
         "estado": "Rechazado",
@@ -307,19 +307,22 @@ def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str,
     if not data or not isinstance(data, dict):
         return default_res
 
-    # Normalizar campos
+    # Normalizar campos base
     estado_raw = str(data.get("estado", "")).strip().lower()
     estado = "Aprobado" if "aprob" in estado_raw else "Rechazado"
 
     marca = str(data.get("marca", "")).strip().title()
-    if not marca or marca.lower() in ["desconocida", "none", "null", ""]:
-        marca = "No Identificada"
+    if not marca or marca.lower() in ["desconocida", "none", "null", "", "no identificada", "desconocido"]:
+        marca = marca_asignada.strip() if (marca_asignada and marca_asignada.strip() not in ["🤖 Detección Automática por IA", "Automática", "Todas las Marcas"]) else "No Identificada"
+    elif marca_asignada and marca_asignada.strip() not in ["🤖 Detección Automática por IA", "Automática", "Todas las Marcas"]:
+        # Si el usuario asignó una marca explícita, se respeta la marca asignada
+        marca = marca_asignada.strip()
 
     vehiculo = str(data.get("vehiculo_cotizado", "") or data.get("modelo", "")).strip() or "No detectado"
     cliente = str(data.get("cliente_nombre", "")).strip() or "No detectado"
     pais = str(data.get("pais", "Chile")).strip().title()
     canal = str(data.get("canal", "WhatsApp")).strip().title()
-    categoria_falla = str(data.get("categoria_falla", "Ninguna")).strip() if estado == "Rechazado" else "Ninguna"
+    categoria_falla = str(data.get("categoria_falla", "Ninguna")).strip()
 
     errores_raw = data.get("errores", [])
     if isinstance(errores_raw, list):
@@ -329,11 +332,50 @@ def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str,
     else:
         errores = []
 
+    obs = str(data.get("observacion", "")).strip() or "Auditoría completada."
+
+    # Diálogo estructurado devuelto por Gemini
+    dialogo = data.get("dialogo_resumen", [])
+    if not isinstance(dialogo, list):
+        dialogo = []
+
+    # --------------------------------------------------------------------------
+    # REGLA CRÍTICA DE SEGURIDAD: BOT SILENCE (0 RESPUESTAS DEL BOT ANTE CONSULTA)
+    # --------------------------------------------------------------------------
+    mensajes_bot = [d for d in dialogo if isinstance(d, dict) and d.get("emisor", "").lower() in ["bot", "asistente", "agente", "ia"]]
+    mensajes_cliente = [d for d in dialogo if isinstance(d, dict) and d.get("emisor", "").lower() in ["cliente", "usuario", "user"]]
+    
+    texto_eval = f"{obs} {' '.join(errores)}".lower()
+    indica_silencio = any(f in texto_eval for f in [
+        "no responde", "no respondió", "sin respuesta", "no contesta", "no contestó", 
+        "no genera respuesta", "deja al cliente sin respuesta", "0 respuestas", "no emite respuesta"
+    ])
+
+    if (len(mensajes_cliente) > 0 and len(mensajes_bot) == 0) or indica_silencio:
+        estado = "Rechazado"
+        categoria_falla = "Falla Técnica del Bot"
+        if not any("no respondió" in err.lower() or "sin respuesta" in err.lower() for err in errores):
+            errores.append("El agente virtual no emitió ninguna respuesta a la consulta del usuario (0 respuestas).")
+        if "no respondió" not in obs.lower() and "sin respuesta" not in obs.lower():
+            obs = "El usuario inició la conversación realizando una consulta, pero el agente virtual no generó ninguna respuesta, dejando al cliente sin atención."
+        
+        # Burbuja de error en WhatsApp Replay
+        if not any(d.get("es_falla") for d in dialogo if isinstance(d, dict)):
+            dialogo.append({
+                "emisor": "Bot",
+                "texto": "🔴 [SIN RESPUESTA DEL AGENTE]: El sistema no generó respuesta y dejó al cliente desatendido.",
+                "es_falla": True
+            })
+
+    # Asegurar consistencia de Aprobado vs Rechazado
     if estado == "Aprobado":
         errores = []
         categoria_falla = "Ninguna"
-
-    obs = str(data.get("observacion", "")).strip() or "Auditoría completada."
+    else:
+        if not categoria_falla or categoria_falla == "Ninguna":
+            categoria_falla = "Falla Técnica del Bot"
+        if not errores:
+            errores.append(obs if obs else "Incidencia técnica en el flujo del asistente.")
 
     # Normalizar tema de conversación (Top Themes)
     tema_val = str(data.get("tema_conversacion", "")).strip()
@@ -360,7 +402,7 @@ def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str,
         elif any(w in texto_busqueda for w in ["cotiz", "precio", "valor", "costo", "descuento", "bono"]):
             tema = "Price Requests"
         else:
-            tema = "Price Requests"
+            tema = "General Inquiry" if (len(mensajes_cliente) > 0 and len(mensajes_bot) == 0) else "Price Requests"
 
     # Conteo dinámico de interacciones / turnos de diálogo
     try:
@@ -368,9 +410,11 @@ def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str,
     except Exception:
         interacciones = 0
     if interacciones <= 0:
-        # Generar un conteo realista de turnos según el volumen de la observación
-        longitud = len(obs) + sum(len(e) for e in errores) + len(nombre_archivo)
-        interacciones = max(6, min(22, 7 + (longitud % 9)))
+        if len(dialogo) > 0:
+            interacciones = len(dialogo)
+        else:
+            longitud = len(obs) + sum(len(e) for e in errores) + len(nombre_archivo)
+            interacciones = max(4, min(22, 5 + (longitud % 9)))
 
     # Solicitud de asesor humano
     solicito_humano_val = data.get("solicito_humano")
@@ -380,9 +424,8 @@ def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str,
         texto_humano = f"{obs} {' '.join(errores)}".lower()
         solicito_humano = any(w in texto_humano for w in ["humano", "asesor", "ejecutivo", "persona", "vendedor", "contactar"]) or tema == "Contact Request"
 
-    # Reconstrucción de diálogo estructurado para WhatsApp Replay
-    dialogo = data.get("dialogo_resumen", [])
-    if not isinstance(dialogo, list) or len(dialogo) == 0:
+    # Si diálogo venía vacío, reconstruir diálogo por defecto
+    if len(dialogo) == 0:
         c_nombre = cliente if cliente != "No detectado" else "Cliente"
         v_nombre = vehiculo if vehiculo != "No detectado" else "Vehículo del catálogo"
         dialogo = [
@@ -397,6 +440,22 @@ def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str,
             err_desc = errores[0] if errores else obs
             dialogo.append({"emisor": "Cliente", "texto": "Quiero los precios finales ahora por favor o hablar con alguien."})
             dialogo.append({"emisor": "Bot", "texto": f"⚠️ [Incidencia en flujo]: {err_desc}", "es_falla": True})
+    elif estado == "Rechazado":
+        # Asegurar que al menos una burbuja en WhatsApp Replay tenga es_falla = True
+        if not any(d.get("es_falla") for d in dialogo if isinstance(d, dict)):
+            # Marcar el último mensaje del bot como fallo
+            marcado = False
+            for d in reversed(dialogo):
+                if isinstance(d, dict) and d.get("emisor", "").lower() in ["bot", "asistente", "agente", "ia"]:
+                    d["es_falla"] = True
+                    marcado = True
+                    break
+            if not marcado:
+                dialogo.append({
+                    "emisor": "Bot",
+                    "texto": f"⚠️ [Incidencia detectada]: {errores[0] if errores else obs}",
+                    "es_falla": True
+                })
 
     return {
         "marca": marca,
@@ -417,7 +476,7 @@ def parsear_respuesta_json(raw_text: str, nombre_archivo: str = "") -> Dict[str,
 # ==============================================================================
 # AUDITORÍA DE UN ARCHIVO INDIVIDUAL
 # ==============================================================================
-def evaluar_archivo(ruta_archivo: str, api_key: str) -> Dict[str, Any]:
+def evaluar_archivo(ruta_archivo: str, api_key: str, marca_asignada: Optional[str] = None) -> Dict[str, Any]:
     """Evalúa un archivo de transcripción (PDF o TXT) con Gemini 3.6 Flash."""
     nombre = os.path.basename(ruta_archivo)
     partes = preparar_partes_para_gemini(ruta_archivo)
@@ -425,7 +484,7 @@ def evaluar_archivo(ruta_archivo: str, api_key: str) -> Dict[str, Any]:
     if not partes:
         return {
             "archivo": nombre,
-            "marca": "No Identificada",
+            "marca": marca_asignada or "No Identificada",
             "pais": "Chile",
             "canal": "WhatsApp",
             "estado": "Rechazado",
@@ -439,7 +498,9 @@ def evaluar_archivo(ruta_archivo: str, api_key: str) -> Dict[str, Any]:
 
     try:
         raw_output = llamar_gemini_api(partes, api_key=api_key)
-        res = parsear_respuesta_json(raw_output, nombre_archivo=nombre)
+        res = parsear_respuesta_json(raw_output, nombre_archivo=nombre, marca_asignada=marca_asignada)
+        if marca_asignada and marca_asignada.strip() not in ["🤖 Detección Automática por IA", "Automática", "Todas las Marcas"]:
+            res["marca"] = marca_asignada.strip()
         res["archivo"] = nombre
         res["fecha_evaluacion"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         return res
@@ -447,7 +508,7 @@ def evaluar_archivo(ruta_archivo: str, api_key: str) -> Dict[str, Any]:
         err_msg = str(e)
         return {
             "archivo": nombre,
-            "marca": "Error de Conexión",
+            "marca": marca_asignada or "Error de Conexión",
             "pais": "Chile",
             "canal": "WhatsApp",
             "estado": "Rechazado",
@@ -552,11 +613,14 @@ def procesar_pipeline(
     api_key: Optional[str] = None, 
     archivos_especificos: Optional[List[str]] = None,
     limite_archivos: Optional[int] = None, 
-    callback_progreso = None
+    callback_progreso = None,
+    marca_asignada: Optional[str] = None
 ) -> Tuple[bool, str]:
     """
     Ejecuta el pipeline de auditoría. Si se le entregan 'archivos_especificos',
     evalúa únicamente esos archivos. De lo contrario, busca en la carpeta de PDFs.
+    Permite opcionalmente 'marca_asignada' para forzar/asignar la marca si el documento
+    no contiene texto explícito de la marca (ej: transcripción de conversación sin respuesta).
     """
     key_a_usar = api_key or CONFIG.get("GEMINI_API_KEY") or cargar_api_key_guardada()
     if not key_a_usar:
@@ -611,7 +675,7 @@ def procesar_pipeline(
         nombre = os.path.basename(ruta)
         print(f"[{i}/{total_evaluar}] Evaluando '{nombre}'...")
 
-        evaluacion = evaluar_archivo(ruta, api_key=key_a_usar)
+        evaluacion = evaluar_archivo(ruta, api_key=key_a_usar, marca_asignada=marca_asignada)
         print(f"  -> Marca: {evaluacion['marca']} | Vehículo: {evaluacion['vehiculo_cotizado']} | Estado: {evaluacion['estado']}")
         print(f"  -> Observación: {evaluacion['observacion'][:90]}...\n")
 

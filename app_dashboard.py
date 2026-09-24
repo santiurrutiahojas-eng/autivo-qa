@@ -519,6 +519,24 @@ def cargar_datos() -> pd.DataFrame:
                                 d_list.append({"emisor": "Cliente", "texto": "Quiero los precios finales ahora por favor o hablar con alguien."})
                                 d_list.append({"emisor": "Bot", "texto": f"⚠️ [Incidencia en flujo]: {err_desc}", "es_falla": True})
                             item["dialogo_resumen"] = d_list
+
+                        # Verificación estricta de Falta de Respuesta del Bot (Silencio)
+                        d_res = item.get("dialogo_resumen", [])
+                        mensajes_b = [d for d in d_res if isinstance(d, dict) and d.get("emisor", "").lower() in ["bot", "asistente", "agente", "ia"]]
+                        mensajes_c = [d for d in d_res if isinstance(d, dict) and d.get("emisor", "").lower() in ["cliente", "usuario", "user"]]
+                        texto_diag = f"{item.get('observacion', '')} {' '.join(item.get('errores', []))}".lower()
+
+                        if (len(mensajes_c) > 0 and len(mensajes_b) == 0) or any(f in texto_diag for f in ["no responde", "no respondió", "sin respuesta", "0 respuestas"]):
+                            item["estado"] = "Rechazado"
+                            item["categoria_falla"] = "Falla Técnica del Bot"
+                            if not any(d.get("es_falla") for d in d_res if isinstance(d, dict)):
+                                d_res.append({
+                                    "emisor": "Bot",
+                                    "texto": "🔴 [SIN RESPUESTA DEL AGENTE]: El sistema no generó respuesta y dejó al cliente desatendido.",
+                                    "es_falla": True
+                                })
+                                item["dialogo_resumen"] = d_res
+
                     return pd.DataFrame(data)
         except Exception:
             pass
@@ -728,6 +746,22 @@ if seccion_seleccionada == "🚀 Subir / Auditar PDFs":
     </div>
     """, unsafe_allow_html=True)
 
+    col_up1, col_up2 = st.columns([1.5, 2.5])
+    with col_up1:
+        opciones_marca_carga = ["🤖 Detección Automática por IA"] + CONFIG["MARCAS_REFERENCIA"]
+        marca_seleccionada_carga = st.selectbox(
+            "🏢 Asignar Marca a las conversaciones:",
+            opciones_marca_carga,
+            index=0,
+            help="Selecciona la marca automotriz de las transcripciones (ej: Hyundai, JAC, Jeep, etc.) si los PDFs no incluyen el logo o nombre en el texto."
+        )
+    with col_up2:
+        st.markdown(f"""
+        <div style="background:#F1F5F9; border-radius:8px; padding:10px 14px; font-size:0.83rem; color:#475569; margin-top:22px; border-left:3px solid #1A62E8;">
+            💡 <b>Tip de Integración:</b> En transcripciones de Autivo donde el bot nunca respondió, el texto del PDF omite el nombre de la marca. Seleccionar aquí <b>{marca_seleccionada_carga}</b> garantiza su correcta categorización.
+        </div>
+        """, unsafe_allow_html=True)
+
     archivos_subidos = st.file_uploader(
         "Arrastra uno o varios PDFs o archivos ZIP aquí:",
         type=["pdf", "txt", "zip"],
@@ -780,10 +814,12 @@ if seccion_seleccionada == "🚀 Subir / Auditar PDFs":
                 estado = evaluacion.get('estado', '')
                 status_text.markdown(f"**[{actual}/{total}]** Evaluado: `{evaluacion.get('archivo')}` — **{marca} {modelo}** ({estado})")
 
+            marca_param = None if marca_seleccionada_carga == "🤖 Detección Automática por IA" else marca_seleccionada_carga
             ok, msg = procesar_pipeline(
                 api_key=gemini_key,
                 archivos_especificos=rutas_a_evaluar if rutas_a_evaluar else None,
-                callback_progreso=callback_ui
+                callback_progreso=callback_ui,
+                marca_asignada=marca_param
             )
 
             if ok:
@@ -1384,6 +1420,40 @@ elif seccion_seleccionada == "📄 Transcriptions":
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+                with st.expander("✏️ Reasignar Marca / Ajustar Dictamen"):
+                    st.caption("Modifica la marca o dictamen si el PDF no traía marca explícita:")
+                    marcas_disponibles_edit = ["Hyundai", "JAC", "Jeep", "Opel", "Peugeot", "Citroën", "Fiat", "RAM", "Geely", "Lippi", "Omni", "No Identificada"]
+                    marca_actual = str(fila.get("marca", "Hyundai"))
+                    idx_marca = marcas_disponibles_edit.index(marca_actual) if marca_actual in marcas_disponibles_edit else 0
+                    nueva_marca = st.selectbox("Marca Asignada:", marcas_disponibles_edit, index=idx_marca, key=f"sel_m_{archivo_sel}")
+                    
+                    estados_edit = ["Rechazado", "Aprobado"]
+                    idx_est = 1 if fila.get("estado") == "Aprobado" else 0
+                    nuevo_estado = st.selectbox("Estado QA:", estados_edit, index=idx_est, key=f"sel_est_{archivo_sel}")
+                    
+                    fallas_edit = ["Falla Técnica del Bot", "Bucle de Validación", "Alucinación o Error de Catálogo", "Frustración del Cliente", "Ninguna"]
+                    cat_actual = str(fila.get("categoria_falla", "Falla Técnica del Bot"))
+                    idx_cat = fallas_edit.index(cat_actual) if cat_actual in fallas_edit else 0
+                    nueva_cat = st.selectbox("Causa de Falla:", fallas_edit, index=idx_cat, key=f"sel_cat_{archivo_sel}")
+                    
+                    if st.button("💾 Guardar Cambios", key=f"btn_save_{archivo_sel}", use_container_width=True):
+                        try:
+                            with open(CONFIG["REPORTE_JSON"], "r", encoding="utf-8") as f_json:
+                                lista_actual = json.load(f_json)
+                            for item in lista_actual:
+                                if item.get("archivo") == archivo_sel:
+                                    item["marca"] = nueva_marca
+                                    item["estado"] = nuevo_estado
+                                    item["categoria_falla"] = nueva_cat if nuevo_estado == "Rechazado" else "Ninguna"
+                                    if nuevo_estado == "Aprobado":
+                                        item["errores"] = []
+                            from procesar_pdf import generar_reportes
+                            generar_reportes(lista_actual, CONFIG["REPORTE_EXCEL"], CONFIG["REPORTE_JSON"])
+                            st.success("✓ Conversación actualizada exitosamente.")
+                            st.rerun()
+                        except Exception as ex_edit:
+                            st.error(f"Error al guardar: {ex_edit}")
 
             with col_insp2:
                 tab_replay, tab_diag = st.tabs(["📱 WhatsApp Replay (Burbujas en Vivo)", "⚖️ Diagnóstico Ejecutivo"])
