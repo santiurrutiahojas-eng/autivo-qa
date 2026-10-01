@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Dashboard Ejecutivo de Auditoría QA Automotriz con IA (Google Gemini 3.6 Flash)
+Dashboard ejecutivo de auditoría QA automotriz con selección de proveedor de IA.
 Diseño Corporativo Oficial Autivo (ai based solutions).
 100% Homogéneo con el Portal Oficial de Autivo (Login y Dashboard Interior).
 """
@@ -9,6 +9,10 @@ Diseño Corporativo Oficial Autivo (ai based solutions).
 import os
 import json
 import base64
+import html
+import io
+import re
+import tempfile
 import zipfile
 import pandas as pd
 import streamlit as st
@@ -101,6 +105,7 @@ COLORES_FALLAS = {
     "Lead Incompleto": "#8B5CF6",
     "Abandono por Falla del Bot": "#F97316",
     "Error de API Gemini": "#64748B",
+    "Error de API OpenAI": "#64748B",
     "Otro": "#3B82F6"
 }
 
@@ -389,21 +394,22 @@ st.markdown("""
 # SISTEMA DE AUTENTICACIÓN / PANTALLA DE LOGIN IDÉNTICA A LA OFICIAL
 # ==============================================================================
 def verificar_credenciales(email: str, password: str) -> bool:
-    emails_validos = [
-        "santiagourrutiahojas@gmail.com", 
-        "saurrutia@alumnos.uai.cl"
-    ]
-    pass_valida = "Santiago2608#"
+    emails_validos = []
+    pass_valida = os.environ.get("LOGIN_PASSWORD", "").strip()
 
     try:
         if hasattr(st, "secrets"):
             if "LOGIN_EMAIL" in st.secrets:
                 emails_validos.append(str(st.secrets["LOGIN_EMAIL"]).strip().lower())
+            if "LOGIN_EMAILS" in st.secrets:
+                emails_validos.extend(e.strip().lower() for e in str(st.secrets["LOGIN_EMAILS"]).split(",") if e.strip())
             pass_valida = str(st.secrets.get("LOGIN_PASSWORD", pass_valida)).strip()
     except Exception:
         pass
 
-    return email.strip().lower() in [e.lower() for e in emails_validos] and password.strip() == pass_valida
+    if os.environ.get("LOGIN_EMAIL"):
+        emails_validos.append(os.environ["LOGIN_EMAIL"].strip().lower())
+    return bool(pass_valida and emails_validos) and email.strip().lower() in emails_validos and password == pass_valida
 
 
 if "autenticado" not in st.session_state:
@@ -433,7 +439,7 @@ if not st.session_state["autenticado"]:
         """, unsafe_allow_html=True)
 
         with st.form("form_login"):
-            correo_ingresado = st.text_input("Username", value="saurrutia@alumnos.uai.cl", placeholder="usuario@correo.com")
+            correo_ingresado = st.text_input("Username", placeholder="usuario@correo.com")
             clave_ingresada = st.text_input("Password", type="password", placeholder="••••••••")
             st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
             btn_ingresar = st.form_submit_button("LOGIN", use_container_width=True)
@@ -462,8 +468,6 @@ if not st.session_state["autenticado"]:
 # ==============================================================================
 # CARGA DE DATOS AUDITADOS
 # ==============================================================================
-gemini_key = cargar_api_key_guardada()
-
 def cargar_datos() -> pd.DataFrame:
     if os.path.exists(CONFIG["REPORTE_JSON"]):
         try:
@@ -485,40 +489,25 @@ def cargar_datos() -> pd.DataFrame:
                             elif any(w in texto_busqueda for w in ["cotiz", "precio", "valor", "costo", "descuento", "bono"]):
                                 item["tema_conversacion"] = "Price Requests"
                             else:
-                                item["tema_conversacion"] = "Price Requests"
+                                item["tema_conversacion"] = "General Inquiry"
 
                         # Asegurar conteo dinámico de turnos de diálogo
                         try:
                             val_int = int(item.get("interacciones", 0))
                         except Exception:
                             val_int = 0
-                        if val_int <= 0:
-                            longitud = len(str(item.get("observacion", ""))) + len(str(item.get("archivo", "")))
-                            item["interacciones"] = max(6, min(22, 7 + (longitud % 9)))
+                        if val_int < 0:
+                            val_int = 0
+                        item["interacciones"] = val_int
 
                         # Asegurar detección de solicitud de ejecutivo humano
                         if "solicito_humano" not in item:
                             texto_humano = f"{item.get('observacion','')} {' '.join(item.get('errores',[]))}".lower()
                             item["solicito_humano"] = any(w in texto_humano for w in ["humano", "asesor", "ejecutivo", "persona", "vendedor", "contactar"]) or item.get("tema_conversacion") == "Contact Request"
 
-                        # Asegurar reconstrucción para WhatsApp Replay
-                        if not item.get("dialogo_resumen"):
-                            c_nombre = item.get("cliente_nombre", "") if item.get("cliente_nombre", "") != "No detectado" else "Cliente"
-                            v_nombre = item.get("vehiculo_cotizado", "") if item.get("vehiculo_cotizado", "") != "No detectado" else "Vehículo"
-                            marca_item = item.get("marca", "Autivo")
-                            d_list = [
-                                {"emisor": "Bot", "texto": f"¡Hola! Bienvenido al canal oficial de {marca_item} Chile. ¿En qué vehículo te gustaría cotizar o recibir información hoy?"},
-                                {"emisor": "Cliente", "texto": f"Hola, me interesa recibir información y cotizar el {v_nombre}."},
-                                {"emisor": "Bot", "texto": f"Excelente elección. El {v_nombre} cuenta con equipamiento y garantía oficial. ¿Deseas avanzar con una cotización personalizada o simulación de financiamiento?"}
-                            ]
-                            if item.get("estado") == "Aprobado":
-                                d_list.append({"emisor": "Cliente", "texto": f"Sí, quiero cotizar. Mi nombre es {c_nombre}."})
-                                d_list.append({"emisor": "Bot", "texto": f"¡Perfecto {c_nombre}! He registrado tus datos de contacto con éxito y un ejecutivo te enviará la propuesta detallada."})
-                            else:
-                                err_desc = item.get("errores", [item.get("observacion", "")])[0] if item.get("errores") else item.get("observacion", "Incidencia técnica")
-                                d_list.append({"emisor": "Cliente", "texto": "Quiero los precios finales ahora por favor o hablar con alguien."})
-                                d_list.append({"emisor": "Bot", "texto": f"⚠️ [Incidencia en flujo]: {err_desc}", "es_falla": True})
-                            item["dialogo_resumen"] = d_list
+                        # Un resumen ausente no se rellena con mensajes inventados.
+                        if not isinstance(item.get("dialogo_resumen"), list):
+                            item["dialogo_resumen"] = []
 
                         # Verificación estricta de Falta de Respuesta del Bot (Silencio)
                         d_res = item.get("dialogo_resumen", [])
@@ -529,13 +518,6 @@ def cargar_datos() -> pd.DataFrame:
                         if (len(mensajes_c) > 0 and len(mensajes_b) == 0) or any(f in texto_diag for f in ["no responde", "no respondió", "sin respuesta", "0 respuestas"]):
                             item["estado"] = "Rechazado"
                             item["categoria_falla"] = "Falla Técnica del Bot"
-                            if not any(d.get("es_falla") for d in d_res if isinstance(d, dict)):
-                                d_res.append({
-                                    "emisor": "Bot",
-                                    "texto": "🔴 [SIN RESPUESTA DEL AGENTE]: El sistema no generó respuesta y dejó al cliente desatendido.",
-                                    "es_falla": True
-                                })
-                                item["dialogo_resumen"] = d_res
 
                     return pd.DataFrame(data)
         except Exception:
@@ -552,12 +534,12 @@ def mostrar_informe_ejecutivo(df_filtrado: pd.DataFrame, marca_nombre: str = "Mu
     """Genera un briefing ejecutivo formal imprimible para Directorio y Gerencia."""
     total_c = len(df_filtrado)
     aprob_c = len(df_filtrado[df_filtrado["estado"] == "Aprobado"])
-    rech_c = total_c - aprob_c
-    pct_ok = round((aprob_c / total_c * 100), 1) if total_c > 0 else 0.0
+    rech_c = len(df_filtrado[df_filtrado["estado"] == "Rechazado"])
+    revision_c = len(df_filtrado[df_filtrado["estado"] == "Revisión"])
+    evaluadas_c = aprob_c + rech_c
+    pct_ok = round((aprob_c / evaluadas_c * 100), 1) if evaluadas_c > 0 else 0.0
     leads_riesgo = rech_c
-    impacto_clp = leads_riesgo * 225000  # Estimación estándar automotriz
-
-    salud_badge = "🟢 ÓPTIMA (>85%)" if pct_ok >= 85 else ("🟡 EN OBSERVACIÓN (70-84%)" if pct_ok >= 70 else "🔴 ALERTA CRÍTICA (<70%)")
+    salud_badge = "SIN EVALUACIONES" if evaluadas_c == 0 else ("🟢 ÓPTIMA (>85%)" if pct_ok >= 85 else ("🟡 EN OBSERVACIÓN (70-84%)" if pct_ok >= 70 else "🔴 ALERTA CRÍTICA (<70%)"))
     
     st.markdown(f"""
     <div style="font-family:'Plus Jakarta Sans', sans-serif; color:#0F172A; border-bottom:2px solid #1A62E8; padding-bottom:12px; margin-bottom:18px;">
@@ -568,7 +550,7 @@ def mostrar_informe_ejecutivo(df_filtrado: pd.DataFrame, marca_nombre: str = "Mu
             </div>
             <div style="text-align:right; font-size:0.82rem; color:#64748B;">
                 <b>Fecha de Emisión:</b> {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}<br/>
-                <b>Auditor Senior:</b> Gemini 3.6 Flash QA Engine
+                <b>Auditor Senior:</b> Motor de evaluación IA
             </div>
         </div>
         <h2 style="font-size:1.3rem; font-weight:700; color:#1E293B; margin:14px 0 2px 0;">
@@ -585,17 +567,19 @@ def mostrar_informe_ejecutivo(df_filtrado: pd.DataFrame, marca_nombre: str = "Mu
     with m1:
         st.metric("Total Conversaciones", total_c)
     with m2:
-        st.metric("Efectividad Comercial", f"{pct_ok}%")
+        st.metric("Efectividad Comercial", f"{pct_ok}%" if evaluadas_c else "—", help="Aprobadas ÷ evaluaciones válidas. Se excluyen los casos en revisión técnica.")
     with m3:
-        st.metric("Salud Operativa SLA", salud_badge)
+        st.metric("Pendientes de revisión", revision_c)
     with m4:
-        st.metric("Leads en Riesgo", f"{leads_riesgo} (~${impacto_clp:,.0f} CLP)".replace(",", "."))
+        st.metric("Leads rechazados", leads_riesgo)
 
     st.markdown("<hr style='margin:16px 0; border-color:#E2E8F0;'/>", unsafe_allow_html=True)
 
     # Diagnóstico y Conclusiones
     st.markdown("### 📋 Conclusiones Ejecutivas y Plan de Acción")
-    if pct_ok >= 85:
+    if evaluadas_c == 0:
+        st.info("No hay evaluaciones válidas para calcular la efectividad. Revisa los casos marcados como Revisión.")
+    elif pct_ok >= 85:
         st.success(f"**Operación Saludable ({pct_ok}% Aprobación):** Los asistentes virtuales de {marca_nombre} presentan un desempeño óptimo, completando flujos de cotización y capturando datos de prospectos de manera fluida. Se recomienda mantener pauta publicitaria activa.")
     elif pct_ok >= 70:
         st.warning(f"**Operación en Observación ({pct_ok}% Aprobación):** Se registran deserciones en modelos puntuales debido a dudas sobre financiamiento o bucles de catálogo. Se sugiere calibrar menús interactivos antes de incrementar volumen de campañas.")
@@ -609,15 +593,19 @@ def mostrar_informe_ejecutivo(df_filtrado: pd.DataFrame, marca_nombre: str = "Mu
         for m, grp in df_filtrado.groupby("marca"):
             c_tot = len(grp)
             c_ok = len(grp[grp["estado"] == "Aprobado"])
+            c_rech = len(grp[grp["estado"] == "Rechazado"])
+            c_revision = len(grp[grp["estado"] == "Revisión"])
+            c_evaluadas = c_ok + c_rech
             c_hum = len(grp[grp["solicito_humano"] == True]) if "solicito_humano" in grp.columns else 0
-            p_ok = (c_ok / c_tot * 100) if c_tot > 0 else 0
+            p_ok = (c_ok / c_evaluadas * 100) if c_evaluadas > 0 else 0
             p_hum = (c_hum / c_tot * 100) if c_tot > 0 else 0
             resumen_rep.append({
                 "Marca": f"Bot {m}",
                 "Chats Auditados": c_tot,
                 "Aprobados": c_ok,
-                "Rechazados": c_tot - c_ok,
-                "Efectividad (% OK)": f"{p_ok:.1f}%",
+                "Rechazados": c_rech,
+                "Por revisar": c_revision,
+                "Efectividad (% OK)": f"{p_ok:.1f}%" if c_evaluadas else "—",
                 "Solicitud Ejecutivo Humano": f"{p_hum:.0f}%"
             })
         st.dataframe(pd.DataFrame(resumen_rep), use_container_width=True, hide_index=True)
@@ -664,44 +652,66 @@ with st.sidebar:
 
     st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
-    # Estado de la IA
-    if gemini_key:
+    st.markdown("#### Motor de evaluación")
+    proveedor_etiqueta = st.selectbox("Proveedor de IA", ["OpenAI", "Google Gemini"], index=0, key="proveedor_ia_ui")
+    proveedor_ia = "openai" if proveedor_etiqueta == "OpenAI" else "gemini"
+    if proveedor_ia == "openai":
+        modelo_default = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+        try:
+            modelo_default = str(st.secrets.get("OPENAI_MODEL", modelo_default))
+        except Exception:
+            pass
+        modelo_ia = st.text_input("Modelo", value=modelo_default, key="modelo_openai_ui", help="Modelo disponible para la Responses API; por defecto gpt-4.1-mini.")
+    else:
+        modelo_default = os.environ.get("GEMINI_MODEL", CONFIG["MODELOS_GEMINI"][0])
+        try:
+            modelo_default = str(st.secrets.get("GEMINI_MODEL", modelo_default))
+        except Exception:
+            pass
+        modelo_ia = st.text_input("Modelo", value=modelo_default, key="modelo_gemini_ui")
+    try:
+        concurrencia_default = max(1, min(10, int(os.environ.get("QA_CONCURRENCY", "4"))))
+    except (TypeError, ValueError):
+        concurrencia_default = 4
+    concurrencia_ia = st.slider("Conversaciones simultáneas", min_value=1, max_value=10, value=concurrencia_default, help="Ajusta este valor según los límites de tu cuenta y el volumen del lote.")
+    api_key = cargar_api_key_guardada(proveedor_ia)
+
+    # Estado de la IA seleccionada
+    if api_key:
         st.markdown("""
         <div style="background:#0F231D; border:1px solid #164E3D; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px;">
             <div style="width:7px; height:7px; background:#10B981; border-radius:50%; box-shadow: 0 0 8px #10B981;"></div>
-            <div style="color:#6EE7B7; font-size:0.78rem; font-weight:600;">Gemini 3.6 Flash: En línea</div>
+            <div style="color:#6EE7B7; font-size:0.78rem; font-weight:600;">""" + proveedor_etiqueta + """ · conexión lista</div>
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <div style="background:#2C1618; border:1px solid #571C20; padding:8px 12px; border-radius:8px; display:flex; align-items:center; gap:8px;">
             <div style="width:7px; height:7px; background:#EF4444; border-radius:50%;"></div>
-            <div style="color:#FCA5A5; font-size:0.78rem; font-weight:600;">Gemini API Key Requerida</div>
+            <div style="color:#FCA5A5; font-size:0.78rem; font-weight:600;">""" + proveedor_etiqueta + """ · falta configurar clave</div>
         </div>
         """, unsafe_allow_html=True)
 
-    with st.expander("🔑 Conexión Gemini API", expanded=not bool(gemini_key)):
-        st.caption("Pega o actualiza tu clave de Google Gemini:")
+    with st.expander("🔑 Clave de API", expanded=not bool(api_key)):
+        st.caption("La clave se conserva solo en esta sesión. Para uso permanente, configúrala en Streamlit Secrets.")
         clave_ingresada_sidebar = st.text_input(
-            "API Key Gemini",
-            value=st.session_state.get("gemini_api_key", ""),
+            f"API Key {proveedor_etiqueta}",
+            value=st.session_state.get(f"{proveedor_ia}_api_key", ""),
             type="password",
-            placeholder="Pega tu clave de Gemini aquí...",
+            placeholder="Pega la clave de API aquí...",
             label_visibility="collapsed"
         )
         if st.button("🔌 Conectar Clave", use_container_width=True):
             if clave_ingresada_sidebar.strip():
-                st.session_state["gemini_api_key"] = clave_ingresada_sidebar.strip()
-                from procesar_pdf import guardar_api_key
-                guardar_api_key(clave_ingresada_sidebar.strip())
-                st.success("✓ Clave conectada exitosamente.")
+                st.session_state[f"{proveedor_ia}_api_key"] = clave_ingresada_sidebar.strip()
+                st.success("Clave disponible durante esta sesión.")
                 st.rerun()
 
     st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
     st.markdown("<hr/>", unsafe_allow_html=True)
 
     # Pie del Sidebar (Organization view & Logout idéntico a la captura)
-    usuario_sesion = st.session_state.get("usuario_actual", "saurrutia@alumnos.uai.cl")
+    usuario_sesion = st.session_state.get("usuario_actual", "Usuario autorizado")
     st.markdown(f"""
     <div style="padding: 0 4px; margin-bottom: 12px;">
         <div style="display:flex; align-items:center; gap:8px; color:#94A3B8; font-size:0.82rem; margin-bottom:6px;">
@@ -732,7 +742,7 @@ with st.sidebar:
 
 
 # ==============================================================================
-# PROCESAMIENTO DE ARCHIVOS (SUBIDA Y EVALUACIÓN CON GEMINI 3.6 FLASH)
+# PROCESAMIENTO DE ARCHIVOS (LOTES CON OPENAI O GEMINI)
 # ==============================================================================
 if seccion_seleccionada == "🚀 Subir / Auditar PDFs":
     st.markdown("""
@@ -741,7 +751,7 @@ if seccion_seleccionada == "🚀 Subir / Auditar PDFs":
             🚀 Cargar Nuevas Conversaciones para Auditoría
         </h2>
         <p style="font-size:0.88rem; color:#64748B; margin:0;">
-            Sube archivos PDF de WhatsApp o Web para cualquier marca (Peugeot, Opel, Citroën, Fiat, Hyundai, JAC, Jeep, RAM, etc.).
+            Sube varias conversaciones TXT o PDF, o un ZIP exportado desde Autivo. Puedes procesar hasta 2.000 conversaciones por lote.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -763,71 +773,99 @@ if seccion_seleccionada == "🚀 Subir / Auditar PDFs":
         """, unsafe_allow_html=True)
 
     archivos_subidos = st.file_uploader(
-        "Arrastra uno o varios PDFs o archivos ZIP aquí:",
+        "Arrastra uno o varios archivos o ZIP aquí:",
         type=["pdf", "txt", "zip"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        help="Hasta 50 MB por archivo. Cada ZIP puede contener PDF y TXT en subcarpetas."
     )
 
-    btn_evaluar = st.button("🚀 Iniciar Auditoría QA con Gemini 3.6 Flash", type="primary", use_container_width=True)
+    btn_evaluar = st.button(f"🚀 Evaluar lote con {proveedor_etiqueta}", type="primary", use_container_width=True)
+    if archivos_subidos:
+        st.caption(f"{len(archivos_subidos)} archivo(s) cargado(s). Los ZIP se expandirán antes de evaluar.")
 
     if btn_evaluar:
-        if not gemini_key:
-            st.error("⚠️ No se encontró la API Key de Gemini configurada.")
+        if not api_key:
+            st.error(f"No hay una clave de API configurada para {proveedor_etiqueta}. Agrégala en Secrets o en el panel lateral.")
+        elif not archivos_subidos:
+            st.warning("Primero selecciona una o más conversaciones.")
         else:
-            carpeta_destino = CONFIG["CARPETA_PDFS"]
-            os.makedirs(carpeta_destino, exist_ok=True)
+            max_lote = 2000
             rutas_a_evaluar = []
+            avisos_lote = []
+            contador_archivo = [0]
+            bytes_zip = 0
+            with tempfile.TemporaryDirectory(prefix="autivo_qa_batch_") as carpeta_temporal:
+                def guardar_temporal(nombre, contenido):
+                    contador_archivo[0] += 1
+                    nombre_seguro = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(nombre)) or "conversacion"
+                    extension = os.path.splitext(nombre_seguro)[1].lower()
+                    if extension not in (".pdf", ".txt"):
+                        return
+                    destino = os.path.join(carpeta_temporal, f"{contador_archivo[0]:05d}_{nombre_seguro}")
+                    with open(destino, "wb") as archivo_destino:
+                        archivo_destino.write(contenido)
+                    rutas_a_evaluar.append(destino)
 
-            if archivos_subidos:
                 for archivo in archivos_subidos:
-                    nombre = archivo.name
-                    if nombre.lower().endswith(".zip"):
+                    contenido = archivo.getvalue()
+                    if len(contenido) > 50 * 1024 * 1024:
+                        avisos_lote.append(f"{archivo.name}: supera 50 MB y se omitió.")
+                        continue
+                    if archivo.name.lower().endswith(".zip"):
                         try:
-                            archivo.seek(0)
-                            with zipfile.ZipFile(archivo, 'r') as zf:
-                                for m in zf.namelist():
-                                    if m.lower().endswith(('.pdf', '.txt')) and not '__macosx' in m.lower():
-                                        nb = os.path.basename(m)
-                                        if nb:
-                                            p_out = os.path.join(carpeta_destino, nb)
-                                            with open(p_out, "wb") as f_out:
-                                                f_out.write(zf.read(m))
-                                            rutas_a_evaluar.append(p_out)
-                        except Exception as e:
-                            st.error(f"Error descomprimiendo ZIP: {e}")
+                            with zipfile.ZipFile(io.BytesIO(contenido), "r") as zf:
+                                miembros = [m for m in zf.infolist() if not m.is_dir() and m.filename.lower().endswith((".pdf", ".txt")) and "__macosx" not in m.filename.lower()]
+                                for miembro in miembros:
+                                    if len(rutas_a_evaluar) >= max_lote:
+                                        avisos_lote.append(f"Se alcanzó el máximo de {max_lote:,} conversaciones; el resto se omitió.")
+                                        break
+                                    if miembro.file_size > 25 * 1024 * 1024:
+                                        avisos_lote.append(f"{os.path.basename(miembro.filename)}: supera 25 MB y se omitió.")
+                                        continue
+                                    bytes_zip += miembro.file_size
+                                    if bytes_zip > 500 * 1024 * 1024:
+                                        avisos_lote.append("El lote ZIP superó 500 MB descomprimidos; se omitió el resto.")
+                                        break
+                                    guardar_temporal(miembro.filename, zf.read(miembro))
+                        except (zipfile.BadZipFile, OSError):
+                            avisos_lote.append(f"{archivo.name}: ZIP inválido o dañado.")
                     else:
-                        archivo.seek(0)
-                        ruta_guardada = os.path.join(carpeta_destino, nombre)
-                        with open(ruta_guardada, "wb") as f_out:
-                            f_out.write(archivo.getbuffer())
-                        rutas_a_evaluar.append(ruta_guardada)
+                        if len(rutas_a_evaluar) >= max_lote:
+                            avisos_lote.append(f"Se alcanzó el máximo de {max_lote:,} conversaciones; el resto se omitió.")
+                            break
+                        guardar_temporal(archivo.name, contenido)
 
-            st.info("⚡ Conectando con Google Gemini 3.6 Flash para auditar conversaciones...")
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+                if avisos_lote:
+                    for aviso in avisos_lote[:10]:
+                        st.warning(aviso)
+                    if len(avisos_lote) > 10:
+                        st.caption(f"{len(avisos_lote) - 10} avisos adicionales.")
+                if not rutas_a_evaluar:
+                    st.error("No encontramos ningún PDF o TXT válido en la carga.")
+                else:
+                    st.info(f"Evaluando {len(rutas_a_evaluar):,} conversaciones con {proveedor_etiqueta} ({modelo_ia}) · {concurrencia_ia} simultáneas.")
+                    progress_bar = st.progress(0, text="Iniciando lote…")
+                    status_text = st.empty()
 
-            def callback_ui(actual, total, evaluacion):
-                p = actual / max(total, 1)
-                progress_bar.progress(p)
-                marca = evaluacion.get('marca', 'No Identificada')
-                modelo = evaluacion.get('vehiculo_cotizado', 'Vehículo')
-                estado = evaluacion.get('estado', '')
-                status_text.markdown(f"**[{actual}/{total}]** Evaluado: `{evaluacion.get('archivo')}` — **{marca} {modelo}** ({estado})")
+                    def callback_ui(actual, total, evaluacion):
+                        progress_bar.progress(actual / max(total, 1), text=f"Evaluando: {actual:,} de {total:,}")
+                        status_text.markdown(f"**[{actual:,}/{total:,}]** `{evaluacion.get('archivo')}` — **{evaluacion.get('marca', 'No identificada')} · {evaluacion.get('estado', 'Revisión')}**")
 
-            marca_param = None if marca_seleccionada_carga == "🤖 Detección Automática por IA" else marca_seleccionada_carga
-            ok, msg = procesar_pipeline(
-                api_key=gemini_key,
-                archivos_especificos=rutas_a_evaluar if rutas_a_evaluar else None,
-                callback_progreso=callback_ui,
-                marca_asignada=marca_param
-            )
-
-            if ok:
-                st.success(f"🎉 {msg}")
-                st.balloons()
-                st.rerun()
-            else:
-                st.error(f"Aviso: {msg}")
+                    marca_param = None if marca_seleccionada_carga == "🤖 Detección Automática por IA" else marca_seleccionada_carga
+                    ok, msg = procesar_pipeline(
+                        api_key=api_key,
+                        archivos_especificos=rutas_a_evaluar,
+                        callback_progreso=callback_ui,
+                        marca_asignada=marca_param,
+                        proveedor=proveedor_ia,
+                        modelo=modelo_ia.strip(),
+                        concurrencia=concurrencia_ia,
+                    )
+                    if ok:
+                        st.success(f"Lote finalizado. {msg}")
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
     st.stop()
 
@@ -936,7 +974,9 @@ if seccion_seleccionada == "🏠 Home":
     total_convs = len(df_actual) if not df_actual.empty else 0
     aprobados = len(df_actual[df_actual["estado"] == "Aprobado"]) if not df_actual.empty else 0
     rechazados = len(df_actual[df_actual["estado"] == "Rechazado"]) if not df_actual.empty else 0
-    tasa_efectividad = (aprobados / total_convs * 100) if total_convs > 0 else 0.0
+    revisiones = len(df_actual[df_actual["estado"] == "Revisión"]) if not df_actual.empty else 0
+    evaluaciones_validas = aprobados + rechazados
+    tasa_efectividad = (aprobados / evaluaciones_validas * 100) if evaluaciones_validas > 0 else 0.0
 
     # Conteo dinámico y real de interacciones / turnos de diálogo
     if not df_actual.empty and "interacciones" in df_actual.columns:
@@ -949,10 +989,8 @@ if seccion_seleccionada == "🏠 Home":
     interacciones_str = f"{interacciones_totales:,}".replace(",", ".")
     promedio_str = str(promedio_interacciones).replace(".", ",")
 
-    # Estimación de Leads en Riesgo y Pérdida Comercial (Margen estimado automotriz $225.000 CLP/lead)
+    # Los casos en revisión no cuentan como rechazo ni como lead en riesgo.
     leads_en_riesgo = rechazados
-    impacto_riesgo_clp = leads_en_riesgo * 225000
-    impacto_str = f"${impacto_riesgo_clp:,.0f} CLP".replace(",", ".")
 
     kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
 
@@ -1015,7 +1053,7 @@ if seccion_seleccionada == "🏠 Home":
             </div>
             <div>
                 <div class="autivo-kpi-value" style="color:#DC2626;">{leads_en_riesgo}</div>
-                <div class="autivo-kpi-footer">≈ {impacto_str} en ventas en riesgo</div>
+                <div class="autivo-kpi-footer">{revisiones} casos requieren revisión técnica</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1026,7 +1064,13 @@ if seccion_seleccionada == "🏠 Home":
     # 3.1 SEMÁFORO DE SALUD OPERATIVA Y CALIDAD SLA (EXECUTIVE HEALTH SCORE)
     # --------------------------------------------------------------------------
     if not df_actual.empty:
-        if tasa_efectividad >= 85.0:
+        if evaluaciones_validas == 0:
+            sla_tag = "⚪ SIN EVALUACIONES VÁLIDAS"
+            sla_color = "#475569"
+            sla_bg = "#F1F5F9"
+            sla_border = "#CBD5E1"
+            sla_text = f"{revisiones} casos requieren revisión antes de calcular efectividad."
+        elif tasa_efectividad >= 85.0:
             sla_tag = "🟢 OPERACIÓN SALUDABLE"
             sla_color = "#15803D"
             sla_bg = "#F0FDF4"
@@ -1083,14 +1127,19 @@ if seccion_seleccionada == "🏠 Home":
             for m, grupo in df_validas.groupby("marca"):
                 cnt = len(grupo)
                 aprob = len(grupo[grupo["estado"] == "Aprobado"])
-                pct = (aprob / cnt * 100) if cnt > 0 else 0.0
+                rechaz = len(grupo[grupo["estado"] == "Rechazado"])
+                revision = len(grupo[grupo["estado"] == "Revisión"])
+                evaluadas = aprob + rechaz
+                pct = (aprob / evaluadas * 100) if evaluadas > 0 else 0.0
                 filas_marcas.append({
                     "Marca": f"Bot {m}",
                     "Marca_Simple": m,
                     "Efectividad (%)": round(pct, 1),
                     "Conversaciones": cnt,
+                    "Evaluaciones válidas": evaluadas,
                     "Aprobadas": aprob,
-                    "Rechazadas": cnt - aprob
+                    "Rechazadas": rechaz,
+                    "Por revisar": revision
                 })
             
             df_chart_marcas = pd.DataFrame(filas_marcas).sort_values(by="Efectividad (%)", ascending=True)
@@ -1104,7 +1153,7 @@ if seccion_seleccionada == "🏠 Home":
             chart_bars = chart_base.mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8, size=46, opacity=0.85).encode(
                 y=alt.Y('Efectividad (%):Q', title='Efectividad (% Aprobadas)', scale=alt.Scale(domain=[0, 115]), axis=alt.Axis(gridColor='#F1F5F9', labelColor='#64748B')),
                 color=alt.Color('Marca_Simple:N', scale=alt.Scale(domain=list(COLORES_MARCAS.keys()), range=list(COLORES_MARCAS.values())), legend=None),
-                tooltip=['Marca', 'Efectividad (%)', 'Conversaciones', 'Aprobadas', 'Rechazadas']
+                tooltip=['Marca', 'Efectividad (%)', 'Conversaciones', 'Evaluaciones válidas', 'Aprobadas', 'Rechazadas', 'Por revisar']
             )
 
             # Etiqueta de porcentaje exacto sobre cada barra
@@ -1210,19 +1259,14 @@ if seccion_seleccionada == "🏠 Home":
         st.markdown("""
         <div class="autivo-card">
             <div class="autivo-card-title">
-                Rendimiento & Clicks por Marca
+                Rendimiento por Marca
             </div>
         """, unsafe_allow_html=True)
 
-        tab_clicks, tab_podio = st.tabs(["📊 Start Menu Button Clicks", "🏆 Leaderboard de Marcas"])
+        tab_clicks, tab_podio = st.tabs(["📊 Conversaciones por Marca", "🏆 Leaderboard de Marcas"])
 
         with tab_clicks:
-            # Tabla idéntica a la captura
-            df_clicks = pd.DataFrame([
-                {"Button": "Cotizar", "Clicks": 102, "Percentage": "74%"},
-                {"Button": "Financiamiento", "Clicks": 21, "Percentage": "15%"},
-                {"Button": "Especificaciones", "Clicks": 15, "Percentage": "11%"}
-            ])
+            df_clicks = pd.DataFrame(columns=["Marca", "Conversaciones", "Tasa de aprobación"])
 
             if not df_actual.empty and "marca" in df_actual.columns:
                 resumen_marcas = []
@@ -1230,20 +1274,21 @@ if seccion_seleccionada == "🏠 Home":
                     if m == "Error de Conexión":
                         continue
                     cnt = len(grupo)
-                    pct_aprob = (len(grupo[grupo["estado"] == "Aprobado"]) / cnt * 100) if cnt > 0 else 0
+                    aprob = len(grupo[grupo["estado"] == "Aprobado"])
+                    rechaz = len(grupo[grupo["estado"] == "Rechazado"])
+                    evaluadas = aprob + rechaz
+                    pct_aprob = (aprob / evaluadas * 100) if evaluadas > 0 else 0
                     resumen_marcas.append({
-                        "Button": f"Bot {m}",
-                        "Clicks": cnt,
-                        "Percentage": f"{pct_aprob:.0f}% OK"
+                        "Marca": f"Bot {m}",
+                        "Conversaciones": cnt,
+                        "Tasa de aprobación": f"{pct_aprob:.0f}%" if evaluadas else "—"
                     })
                 if resumen_marcas:
                     df_clicks = pd.DataFrame(resumen_marcas)
-
-            st.dataframe(
-                df_clicks, 
-                hide_index=True, 
-                use_container_width=True
-            )
+            if df_clicks.empty:
+                st.info("No hay conversaciones auditadas para comparar.")
+            else:
+                st.dataframe(df_clicks, hide_index=True, use_container_width=True)
 
         with tab_podio:
             if not df_actual.empty and "marca" in df_actual.columns:
@@ -1253,7 +1298,9 @@ if seccion_seleccionada == "🏠 Home":
                         continue
                     tot = len(grp)
                     ok = len(grp[grp["estado"] == "Aprobado"])
-                    p_ok = (ok / tot * 100) if tot > 0 else 0
+                    rechaz = len(grp[grp["estado"] == "Rechazado"])
+                    evaluadas = ok + rechaz
+                    p_ok = (ok / evaluadas * 100) if evaluadas > 0 else 0
                     hum = len(grp[grp["solicito_humano"] == True]) if "solicito_humano" in grp.columns else 0
                     p_hum = (hum / tot * 100) if tot > 0 else 0
                     lista_ranking.append({
@@ -1362,7 +1409,7 @@ elif seccion_seleccionada == "📄 Transcriptions":
             📄 Transcriptions & Auditoría Detallada
         </h2>
         <p style="font-size:0.88rem; color:#64748B; margin:0;">
-            Explora las conversaciones individuales, transcripciones y el diagnóstico dictaminado por Gemini 3.6 Flash.
+            Explora las conversaciones individuales, transcripciones y el diagnóstico del motor de IA.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -1376,7 +1423,7 @@ elif seccion_seleccionada == "📄 Transcriptions":
             m_list = ["Todas"] + sorted([m for m in df_global["marca"].dropna().unique()])
             filtro_m = st.selectbox("Marca:", m_list)
         with f_col2:
-            filtro_est = st.selectbox("Estado QA:", ["Todos", "Aprobado", "Rechazado"])
+            filtro_est = st.selectbox("Estado QA:", ["Todos", "Aprobado", "Rechazado", "Revisión"])
         with f_col3:
             cats = ["Todas"] + sorted([c for c in df_global["categoria_falla"].dropna().unique()])
             filtro_cat = st.selectbox("Categoría Falla:", cats)
@@ -1403,20 +1450,32 @@ elif seccion_seleccionada == "📄 Transcriptions":
 
             col_insp1, col_insp2 = st.columns([1, 1.8])
             with col_insp1:
-                badge_html = "<span style='background:#DCFCE7; color:#15803D; font-weight:700; padding:4px 10px; border-radius:12px; font-size:0.8rem;'>APROBADO</span>" if fila.get("estado") == "Aprobado" else "<span style='background:#FEE2E2; color:#B91C1C; font-weight:700; padding:4px 10px; border-radius:12px; font-size:0.8rem;'>RECHAZADO</span>"
+                if fila.get("estado") == "Aprobado":
+                    badge_html = "<span style='background:#DCFCE7; color:#15803D; font-weight:700; padding:4px 10px; border-radius:12px; font-size:0.8rem;'>APROBADO</span>"
+                elif fila.get("estado") == "Rechazado":
+                    badge_html = "<span style='background:#FEE2E2; color:#B91C1C; font-weight:700; padding:4px 10px; border-radius:12px; font-size:0.8rem;'>RECHAZADO</span>"
+                else:
+                    badge_html = "<span style='background:#FEF3C7; color:#92400E; font-weight:700; padding:4px 10px; border-radius:12px; font-size:0.8rem;'>REVISIÓN</span>"
+                archivo_html = html.escape(str(fila.get("archivo", "")))
+                marca_html = html.escape(str(fila.get("marca", "")))
+                vehiculo_html = html.escape(str(fila.get("vehiculo_cotizado", "")))
+                cliente_html = html.escape(str(fila.get("cliente_nombre", "No detectado")))
+                canal_html = html.escape(str(fila.get("canal", "WhatsApp")))
+                pais_html = html.escape(str(fila.get("pais", "Chile")))
+                categoria_html = html.escape(str(fila.get("categoria_falla", "Ninguna")))
                 st.markdown(f"""
                 <div class="autivo-card" style="padding:18px 20px;">
                     <div style="font-weight:700; font-size:0.95rem; color:#0F172A; margin-bottom:12px; border-bottom:1px solid #E2E8F0; padding-bottom:8px;">
                         📄 Ficha de Conversación
                     </div>
                     <div style="font-size:0.84rem; line-height:2;">
-                        <div><b style="color:#64748B;">Archivo:</b> <code style="font-size:0.75rem;">{fila.get('archivo', '')}</code></div>
-                        <div><b style="color:#64748B;">Marca:</b> <span style="color:#1A62E8; font-weight:700;">{fila.get('marca', '')}</span></div>
-                        <div><b style="color:#64748B;">Vehículo:</b> <b>{fila.get('vehiculo_cotizado', '')}</b></div>
-                        <div><b style="color:#64748B;">Cliente:</b> {fila.get('cliente_nombre', 'No detectado')}</div>
-                        <div><b style="color:#64748B;">Canal / País:</b> {fila.get('canal', 'WhatsApp')} | {fila.get('pais', 'Chile')}</div>
+                        <div><b style="color:#64748B;">Archivo:</b> <code style="font-size:0.75rem;">{archivo_html}</code></div>
+                        <div><b style="color:#64748B;">Marca:</b> <span style="color:#1A62E8; font-weight:700;">{marca_html}</span></div>
+                        <div><b style="color:#64748B;">Vehículo:</b> <b>{vehiculo_html}</b></div>
+                        <div><b style="color:#64748B;">Cliente:</b> {cliente_html}</div>
+                        <div><b style="color:#64748B;">Canal / País:</b> {canal_html} | {pais_html}</div>
                         <div style="margin-top:8px;"><b style="color:#64748B;">Dictamen:</b> {badge_html}</div>
-                        <div style="margin-top:4px;"><b style="color:#64748B;">Causa Falla:</b> <span style="color:#DC2626; font-weight:600;">{fila.get('categoria_falla', 'Ninguna')}</span></div>
+                        <div style="margin-top:4px;"><b style="color:#64748B;">Causa Falla:</b> <span style="color:#DC2626; font-weight:600;">{categoria_html}</span></div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1428,8 +1487,8 @@ elif seccion_seleccionada == "📄 Transcriptions":
                     idx_marca = marcas_disponibles_edit.index(marca_actual) if marca_actual in marcas_disponibles_edit else 0
                     nueva_marca = st.selectbox("Marca Asignada:", marcas_disponibles_edit, index=idx_marca, key=f"sel_m_{archivo_sel}")
                     
-                    estados_edit = ["Rechazado", "Aprobado"]
-                    idx_est = 1 if fila.get("estado") == "Aprobado" else 0
+                    estados_edit = ["Revisión", "Rechazado", "Aprobado"]
+                    idx_est = estados_edit.index(fila.get("estado")) if fila.get("estado") in estados_edit else 0
                     nuevo_estado = st.selectbox("Estado QA:", estados_edit, index=idx_est, key=f"sel_est_{archivo_sel}")
                     
                     fallas_edit = ["Falla Técnica del Bot", "Bucle de Validación", "Alucinación o Error de Catálogo", "Frustración del Cliente", "Ninguna"]
@@ -1445,9 +1504,13 @@ elif seccion_seleccionada == "📄 Transcriptions":
                                 if item.get("archivo") == archivo_sel:
                                     item["marca"] = nueva_marca
                                     item["estado"] = nuevo_estado
-                                    item["categoria_falla"] = nueva_cat if nuevo_estado == "Rechazado" else "Ninguna"
-                                    if nuevo_estado == "Aprobado":
+                                    item["categoria_falla"] = nueva_cat if nuevo_estado == "Rechazado" else ("Error de Procesamiento" if nuevo_estado == "Revisión" else "Ninguna")
+                                    if nuevo_estado in ("Aprobado", "Revisión"):
                                         item["errores"] = []
+                                    if nuevo_estado == "Revisión":
+                                        item["motivo_revision"] = "Pendiente de revisión manual"
+                                    else:
+                                        item.pop("motivo_revision", None)
                             from procesar_pdf import generar_reportes
                             generar_reportes(lista_actual, CONFIG["REPORTE_EXCEL"], CONFIG["REPORTE_JSON"])
                             st.success("✓ Conversación actualizada exitosamente.")
@@ -1456,27 +1519,28 @@ elif seccion_seleccionada == "📄 Transcriptions":
                             st.error(f"Error al guardar: {ex_edit}")
 
             with col_insp2:
-                tab_replay, tab_diag = st.tabs(["📱 WhatsApp Replay (Burbujas en Vivo)", "⚖️ Diagnóstico Ejecutivo"])
+                tab_replay, tab_diag = st.tabs(["💬 Resumen del diálogo", "⚖️ Diagnóstico Ejecutivo"])
                 
                 with tab_replay:
                     dialogo = fila.get("dialogo_resumen", [])
                     if isinstance(dialogo, list) and len(dialogo) > 0:
-                        marca_chat = fila.get("marca", "Autivo")
+                        st.caption("Resumen sintetizado por IA; no es una transcripción literal. Consulta el archivo original para verificar el contenido.")
+                        marca_chat = html.escape(str(fila.get("marca", "Autivo")))
                         m_color = COLORES_MARCAS.get(marca_chat, "#1A62E8")
                         
                         burbujas_html = []
-                        for i, turno in enumerate(dialogo):
-                            emisor = turno.get("emisor", "Bot")
-                            texto = turno.get("texto", "")
-                            es_falla = turno.get("es_falla", False) or (emisor == "Bot" and i == len(dialogo)-1 and fila.get("estado") == "Rechazado")
-                            hora = f"14:{20 + i:02d}"
+                        for turno in dialogo:
+                            emisor_raw = str(turno.get("emisor", "Asistente"))
+                            emisor = html.escape(emisor_raw)
+                            texto = html.escape(str(turno.get("texto", "")))
+                            es_falla = turno.get("es_falla", False)
+                            clase_cliente = emisor_raw.lower() in ["cliente", "usuario", "user"]
 
-                            if emisor == "Cliente":
+                            if clase_cliente:
                                 burbujas_html.append(
                                     f'<div style="display:flex; justify-content:flex-end; margin-bottom:10px;">'
                                     f'<div style="background:#D9FDD3; color:#111B21; border-radius:8px 8px 0 8px; padding:8px 12px; max-width:78%; box-shadow:0 1px 1px rgba(0,0,0,0.06); font-size:0.87rem; line-height:1.4;">'
-                                    f'<div>{texto}</div>'
-                                    f'<div style="text-align:right; font-size:0.7rem; color:#667781; margin-top:3px;">{hora} <span style="color:#53BDEB;">✓✓</span></div>'
+                                    f'<div style="font-size:0.68rem; color:#52605A; font-weight:700; margin-bottom:4px;">{emisor}</div><div>{texto}</div>'
                                     f'</div></div>'
                                 )
                             else:
@@ -1484,25 +1548,26 @@ elif seccion_seleccionada == "📄 Transcriptions":
                                     burbujas_html.append(
                                         f'<div style="display:flex; justify-content:flex-start; margin-bottom:10px;">'
                                         f'<div style="background:#FEF2F2; color:#991B1B; border:1.5px solid #EF4444; border-radius:8px 8px 8px 0; padding:10px 14px; max-width:82%; box-shadow:0 1px 2px rgba(239,68,68,0.15); font-size:0.87rem; line-height:1.4;">'
-                                        f'<div style="display:inline-block; background:#DC2626; color:#FFFFFF; font-size:0.68rem; font-weight:800; padding:2px 8px; border-radius:10px; margin-bottom:6px; letter-spacing:0.4px;">🚨 INCIDENCIA DETECTADA POR JUEZ IA</div>'
-                                        f'<div style="font-weight:600;">{texto}</div>'
-                                        f'<div style="text-align:right; font-size:0.7rem; color:#B91C1C; margin-top:4px;">{hora}</div>'
+                                        f'<div style="display:inline-block; background:#DC2626; color:#FFFFFF; font-size:0.68rem; font-weight:800; padding:2px 8px; border-radius:10px; margin-bottom:6px; letter-spacing:0.4px;">PUNTO MARCADO POR IA</div>'
+                                        f'<div style="font-size:0.68rem; color:#52605A; font-weight:700; margin-bottom:4px;">{emisor}</div><div style="font-weight:600;">{texto}</div>'
                                         f'</div></div>'
                                     )
                                 else:
                                     burbujas_html.append(
                                         f'<div style="display:flex; justify-content:flex-start; margin-bottom:10px;">'
                                         f'<div style="background:#FFFFFF; color:#111B21; border-radius:8px 8px 8px 0; padding:8px 12px; max-width:78%; box-shadow:0 1px 1px rgba(0,0,0,0.06); font-size:0.87rem; line-height:1.4;">'
-                                        f'<div>{texto}</div>'
-                                        f'<div style="text-align:right; font-size:0.7rem; color:#667781; margin-top:3px;">{hora}</div>'
+                                        f'<div style="font-size:0.68rem; color:#52605A; font-weight:700; margin-bottom:4px;">{emisor}</div><div>{texto}</div>'
                                         f'</div></div>'
                                     )
                         
                         chat_content = "".join(burbujas_html)
                         if fila.get("estado") == "Aprobado":
-                            status_banner = '<div style="background:#DCFCE7; color:#15803D; font-weight:700; text-align:center; padding:7px 12px; border-radius:8px; font-size:0.8rem; margin-top:10px;">✓ Conversación Aprobada: Flujo comercial completado con éxito</div>'
+                            status_banner = '<div style="background:#DCFCE7; color:#15803D; font-weight:700; text-align:center; padding:7px 12px; border-radius:8px; font-size:0.8rem; margin-top:10px;">Evaluación aprobada según el criterio QA</div>'
+                        elif fila.get("estado") == "Rechazado":
+                            causa = html.escape(str(fila.get("categoria_falla", "Incidencia")))
+                            status_banner = f'<div style="background:#FEE2E2; color:#B91C1C; font-weight:700; text-align:center; padding:7px 12px; border-radius:8px; font-size:0.8rem; margin-top:10px;">Falla detectada · {causa}</div>'
                         else:
-                            status_banner = f'<div style="background:#FEE2E2; color:#B91C1C; font-weight:700; text-align:center; padding:7px 12px; border-radius:8px; font-size:0.8rem; margin-top:10px;">⚠️ Conversación Rechazada por Falla del Bot ({fila.get("categoria_falla","Incidencia")})</div>'
+                            status_banner = '<div style="background:#FEF3C7; color:#92400E; font-weight:700; text-align:center; padding:7px 12px; border-radius:8px; font-size:0.8rem; margin-top:10px;">Pendiente de revisión manual</div>'
 
                         st.markdown(f"""
                         <div style="background:#EFEAE2; border-radius:12px; border:1px solid #D1D7DB; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.05); max-width:620px; margin:0 auto;">
@@ -1511,8 +1576,8 @@ elif seccion_seleccionada == "📄 Transcriptions":
                                     {marca_chat[:2].upper()}
                                 </div>
                                 <div>
-                                    <div style="font-weight:700; font-size:0.92rem; color:#FFFFFF;">Bot {marca_chat} Chile Oficial</div>
-                                    <div style="font-size:0.72rem; color:#A7F3D0;">● en línea (WhatsApp Concesionario)</div>
+                                    <div style="font-weight:700; font-size:0.92rem; color:#FFFFFF;">Resumen de conversación</div>
+                                    <div style="font-size:0.72rem; color:#A7F3D0;">{marca_chat}</div>
                                 </div>
                             </div>
                             <div style="padding:16px 14px; min-height:260px;">
@@ -1522,7 +1587,7 @@ elif seccion_seleccionada == "📄 Transcriptions":
                         </div>
                         """, unsafe_allow_html=True)
                     else:
-                        st.info("Sin turnos estructurados disponibles para esta conversación.")
+                        st.info("No hay un resumen de diálogo disponible. El diagnóstico y la evidencia se muestran en la pestaña siguiente.")
 
                 with tab_diag:
                     st.markdown(f"""
@@ -1531,7 +1596,7 @@ elif seccion_seleccionada == "📄 Transcriptions":
                             ⚖️ Diagnóstico Ejecutivo de la IA
                         </div>
                         <p style="font-size:0.9rem; color:#334155; line-height:1.6; background:#F8FAFC; padding:14px 16px; border-radius:8px; border-left:4px solid #1A62E8; margin-bottom:14px;">
-                            "{fila.get('observacion', 'Sin observaciones adicionales.')}"
+                            "{html.escape(str(fila.get('observacion', 'Sin observaciones adicionales.')))}"
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1541,5 +1606,10 @@ elif seccion_seleccionada == "📄 Transcriptions":
                         st.markdown("<div style='font-size:0.85rem; font-weight:700; color:#0F172A; margin-bottom:6px;'>🚨 Fallas Críticas Identificadas:</div>", unsafe_allow_html=True)
                         for err in errores:
                             st.error(f"• {err}")
+                    elif fila.get("estado") == "Aprobado":
+                        st.success("Evaluación aprobada según el criterio QA, sin fallas críticas identificadas.")
+                    elif fila.get("estado") == "Revisión":
+                        motivo_revision = fila.get("motivo_revision", "Se requiere revisión manual.")
+                        st.warning(f"Revisión pendiente: {motivo_revision}")
                     else:
-                        st.success("✓ Conversación completada exitosamente sin fallos detectados.")
+                        st.info("El dictamen es rechazado, pero no se registraron errores estructurados. Revisa la observación del juez.")
