@@ -394,22 +394,33 @@ st.markdown("""
 # SISTEMA DE AUTENTICACIÓN / PANTALLA DE LOGIN IDÉNTICA A LA OFICIAL
 # ==============================================================================
 def verificar_credenciales(email: str, password: str) -> bool:
-    emails_validos = []
-    pass_valida = os.environ.get("LOGIN_PASSWORD", "").strip()
+    # Credenciales autorizadas por defecto para evitar bloqueos si secrets no está configurado
+    emails_validos = [
+        "santiagourrutiahojas@gmail.com",
+        "saurrutia@alumnos.uai.cl"
+    ]
+    pass_valida = "Santiago2608#"
 
+    # Cargar desde Streamlit Secrets si están definidos
     try:
         if hasattr(st, "secrets"):
             if "LOGIN_EMAIL" in st.secrets:
                 emails_validos.append(str(st.secrets["LOGIN_EMAIL"]).strip().lower())
             if "LOGIN_EMAILS" in st.secrets:
                 emails_validos.extend(e.strip().lower() for e in str(st.secrets["LOGIN_EMAILS"]).split(",") if e.strip())
-            pass_valida = str(st.secrets.get("LOGIN_PASSWORD", pass_valida)).strip()
+            if "LOGIN_PASSWORD" in st.secrets:
+                pass_valida = str(st.secrets["LOGIN_PASSWORD"]).strip()
     except Exception:
         pass
 
+    # Cargar desde variables de entorno si están definidas
     if os.environ.get("LOGIN_EMAIL"):
         emails_validos.append(os.environ["LOGIN_EMAIL"].strip().lower())
-    return bool(pass_valida and emails_validos) and email.strip().lower() in emails_validos and password == pass_valida
+    if os.environ.get("LOGIN_PASSWORD"):
+        pass_valida = os.environ["LOGIN_PASSWORD"].strip()
+
+    email_clean = email.strip().lower()
+    return email_clean in [e.lower() for e in emails_validos] and password.strip() == pass_valida
 
 
 if "autenticado" not in st.session_state:
@@ -439,7 +450,7 @@ if not st.session_state["autenticado"]:
         """, unsafe_allow_html=True)
 
         with st.form("form_login"):
-            correo_ingresado = st.text_input("Username", placeholder="usuario@correo.com")
+            correo_ingresado = st.text_input("Username", value="santiagourrutiahojas@gmail.com", placeholder="usuario@correo.com")
             clave_ingresada = st.text_input("Password", type="password", placeholder="••••••••")
             st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
             btn_ingresar = st.form_submit_button("LOGIN", use_container_width=True)
