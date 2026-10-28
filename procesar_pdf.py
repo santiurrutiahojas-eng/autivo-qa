@@ -55,7 +55,29 @@ def cargar_api_key_guardada(proveedor: str = "gemini") -> str:
     except Exception:
         pass
 
-    return os.environ.get(env_name, "").strip()
+    env_val = os.environ.get(env_name, "").strip()
+    if env_val:
+        return env_val
+
+    # 3. Fallback a archivo local de configuración (para Gemini en ejecución local)
+    if proveedor == "gemini":
+        candidatos = [
+            CONFIG_FILE,
+            os.path.join(os.path.dirname(__file__), CONFIG_FILE),
+            r"C:\Users\urruh\OneDrive\Escritorio\Archivos_Autivo_QA\.config_qa.json"
+        ]
+        for path_cand in candidatos:
+            if os.path.exists(path_cand):
+                try:
+                    with open(path_cand, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        val = data.get("gemini_api_key", "").strip()
+                        if val:
+                            return val
+                except Exception:
+                    pass
+
+    return ""
 
 
 def guardar_api_key(api_key: str):
@@ -75,7 +97,7 @@ CONFIG = {
     "REPORTE_EXCEL": "reporte_qa_autivo.xlsx",
     "REPORTE_JSON": "resultados_qa.json",
     "TIMEOUT_SEGUNDOS": 60,
-    "OPENAI_MODELO": "gpt-4.1-mini",
+    "OPENAI_MODELO": "gpt-4o-mini",
     "CONCURRENCIA": 4,
     "MARCAS_REFERENCIA": [
         "Citroën", "Fiat", "Geely", "Hyundai", "JAC", 
@@ -205,7 +227,7 @@ def llamar_gemini_api(partes: List[Dict[str, Any]], api_key: str, max_reintentos
     raise RuntimeError(ultimo_error or "No se pudo comunicar con Google Gemini.")
 
 
-def llamar_openai_api(partes: List[Dict[str, Any]], api_key: str, modelo: str = "gpt-4.1-mini") -> str:
+def llamar_openai_api(partes: List[Dict[str, Any]], api_key: str, modelo: str = "gpt-4o-mini") -> str:
     """Evalúa texto o PDF (incluidas páginas escaneadas) con Responses y salida JSON estructurada."""
     from openai import OpenAI
 

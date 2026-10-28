@@ -664,15 +664,15 @@ with st.sidebar:
     st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
     st.markdown("#### Motor de evaluación")
-    proveedor_etiqueta = st.selectbox("Proveedor de IA", ["OpenAI", "Google Gemini"], index=0, key="proveedor_ia_ui")
-    proveedor_ia = "openai" if proveedor_etiqueta == "OpenAI" else "gemini"
+    proveedor_etiqueta = st.selectbox("Proveedor de IA", ["Google Gemini", "OpenAI"], index=0, key="proveedor_ia_ui")
+    proveedor_ia = "gemini" if proveedor_etiqueta == "Google Gemini" else "openai"
     if proveedor_ia == "openai":
-        modelo_default = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+        modelo_default = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
         try:
             modelo_default = str(st.secrets.get("OPENAI_MODEL", modelo_default))
         except Exception:
             pass
-        modelo_ia = st.text_input("Modelo", value=modelo_default, key="modelo_openai_ui", help="Modelo disponible para la Responses API; por defecto gpt-4.1-mini.")
+        modelo_ia = st.text_input("Modelo", value=modelo_default, key="modelo_openai_ui", help="Modelo disponible para la Responses API; por defecto gpt-4o-mini.")
     else:
         modelo_default = os.environ.get("GEMINI_MODEL", CONFIG["MODELOS_GEMINI"][0])
         try:
